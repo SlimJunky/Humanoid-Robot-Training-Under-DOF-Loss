@@ -17,10 +17,10 @@ import numpy as np
 
 
 LABEL_KEYWORDS = {
-    "walk": ["walk", "walking"],
+    "walk": ["walk", "walking", "slow walk", "brisk walk"],
     "run": ["run", "running", "jog", "jogging", "sprint"],
     "jump": ["jump", "jumping", "hop", "hopping", "leap"],
-    "wave": ["wave", "waving", "reach", "reaching", "stretch", "stretching", "hand"],
+    "wave": ["wave", "waving", "slow wave", "reach", "reaching", "stretch", "stretching", "hand"],
 }
 
 
