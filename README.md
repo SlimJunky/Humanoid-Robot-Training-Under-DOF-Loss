@@ -1,4 +1,9 @@
-# Template for Isaac Lab Projects
+# Fault-Tolerant Humanoid Motion: Evaluating Imitation Learning and Reinforcement Learning under Degree-of-Freedom Loss
+
+This study investigates the robustness of humanoid control policies trained using imitation learning and reinforcement learning within a simulated environment. The primary research question is: how do different reinforcement learning algorithms perform under partial actuator or sensor failure, and which degrees of freedom (DoFs) are most critical for maintaining stable locomotion? My hypothesis is that policies fine-tuned with reinforcement learning will exhibit varying levels of robustness to joint failures, with some algorithms demonstrating superior adaptability under degraded conditions. In addition to this I believe during the ablation studies, some degrees of freedom, particularly those involved in balance, will have a significantly greater impact on task performance when impaired compared to other joints.
+
+
+# Template for Isaac Lab Projects as provided by Isaac Lab NVIDIA external project template generator
 
 ## Overview
 
