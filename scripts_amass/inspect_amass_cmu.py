@@ -62,7 +62,6 @@ def inspect_npz(path: Path, input_dir: Path) -> dict[str, Any]:
         "file_stem": path.stem,
         "parent_folder": path.parent.name,
         "subject_folder": rel_path.parts[0] if len(rel_path.parts) > 0 else None,
-        # Guess from full relative path, not just "poses"
         "label_guess": guess_label(rel_path.as_posix()),
         "keys": keys,
     }
