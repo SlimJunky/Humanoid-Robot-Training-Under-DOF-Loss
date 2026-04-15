@@ -18,8 +18,9 @@ DEFAULT_PREVIEW_ROWS = 3
 DEFAULT_PREVIEW_COLS = 12
 
 
-# Look through selected motions .npz files and select specific attributes. Save into the data\manifests folder of the project for data inspection before converting
-
+'''Look through selected motions .npz files and select specific attributes. Save into the data\manifests folder of the project for data inspection before converting
+This script does not take the entire poses, trans or dmpls arrays into JSON manifest just a preview for confirmation before converting.
+'''
 
 @dataclass
 class FieldSummary:
@@ -435,8 +436,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    npz_path = Path(args.npz_path)
-    out_dir = Path(args.out_dir)
+    npz_path = Path(args.npz_path.strip()) # Strip incase of spaces, more forgiving on filename
+    out_dir = Path(args.out_dir.strip())
 
     if not npz_path.exists():
         raise FileNotFoundError(f"Input file not found: {npz_path}")
