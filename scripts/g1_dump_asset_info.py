@@ -24,7 +24,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.sim import SimulationCfg, SimulationContext
 
-# Using the official minimal G1 config used by Isaac Lab locomotion configs.
+# Using the official minimal G1 config used by Isaac Lab locomotion. G1 Minimal 23 DOF usage. Faster in simulation and for RL training.
 from isaaclab_assets import G1_MINIMAL_CFG
 
 
@@ -92,7 +92,7 @@ def main():
     robot.update(sim.get_physics_dt())
 
 
-    # Extract asset information
+    #Extract asset information after spawning from Origin 1 Robot and get all the joint names and initial positions.
     dump = {
         "robot_cfg": "G1_MINIMAL_CFG",
         "prim_path": g1_cfg.prim_path,
@@ -136,7 +136,7 @@ def main():
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(to_serializable(dump), indent=2), encoding="utf-8")
 
-    # Print summary
+
     print(f"[INFO] Saved G1 asset dump to: {out_path}")
     print(f"[INFO] Num joints: {dump['num_joints']}")
     print(f"[INFO] Num bodies: {dump['num_bodies']}")
