@@ -436,7 +436,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    npz_path = Path(args.npz_path.strip()) # Strip incase of spaces, more forgiving on filename
+    npz_path = Path(args.npz_path.strip()) # Strip in case of spaces, more forgiving on filename
     out_dir = Path(args.out_dir.strip())
 
     if not npz_path.exists():

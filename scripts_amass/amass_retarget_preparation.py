@@ -115,7 +115,7 @@ def maybe_scalar(arr_or_value: Any) -> Any:
 def derive_category(npz_path: Path) -> str:
     return npz_path.parent.name
 
-
+# Isaac sim & Isaac lab prefer quaternions just like other robotic simulation packages and environments.
 def axis_angle_to_quat(axis_angle: np.ndarray) -> np.ndarray:
     '''Convert Nx3 axis-angle to Nx4 quaternion (w, x, y, z).'''
     aa = np.asarray(axis_angle, dtype=np.float64)
@@ -222,7 +222,8 @@ def prepare_retarget_ready(
         raise ValueError(f"dmpls and poses frame counts do not match: {dmpls.shape[0]} vs {poses.shape[0]}")
 
     src_frames = poses.shape[0]
-    duration_s = src_frames / mocap_framerate
+    # Short hand if else to not accidentally get one more or one less frame duration. Generated JSON Metadata should be correct this way.
+    duration_s = (src_frames - 1) / mocap_framerate if src_frames > 1 else 0.0
 
     start_frame = max(0, int(round(trim_start_s * mocap_framerate)))
     end_frame = src_frames if trim_end_s is None else min(src_frames, int(round(trim_end_s * mocap_framerate)))
@@ -241,6 +242,8 @@ def prepare_retarget_ready(
     root_quat = axis_angle_to_quat(root_orient)
     root_yaw = quat_to_yaw(root_quat)
 
+    '''Want to keep X and Y plane starting at zero with an option to flatten and do the same for Z however I wont be using any complex motions that involve vertical
+    Jumping or anything that will move Z value too off starting position regardless.''' 
     if normalize_root_xy:
         trans = trans.copy()
         trans[:, 0] -= trans[0, 0]
@@ -248,6 +251,7 @@ def prepare_retarget_ready(
         if not keep_vertical_root:
             trans[:, 2] -= trans[0, 2]
 
+    # If target FPS differs then all time-series in data are resampled otherwise keep original FPS.
     if target_fps > 0 and not np.isclose(target_fps, mocap_framerate):
         root_orient = linear_resample_array(root_orient, mocap_framerate, target_fps)
         pose_body = linear_resample_array(pose_body, mocap_framerate, target_fps)
@@ -264,11 +268,12 @@ def prepare_retarget_ready(
     num_frames = int(root_orient.shape[0])
     time_s = np.arange(num_frames, dtype=np.float64) / out_fps
 
+    # Builds joint-name meta data for body and hands. Likely wont use hands.
     body_names = pose_block_names(pose_body.shape[1], pose_hand.shape[1])
 
     mapping_template = {
         "notes": [
-            "This is a TEMPLATE only. Final joint mapping must match exact Unitree G1 asset and DOF order.",
+            "This is a TEMPLATE only. Final joint mapping must match exact Unitree G1 asset and DOF order and be done manually after setup.",
             "AMASS root/body/hand blocks are in SMPL+H axis-angle format.",
             "Do not send these values directly to G1 joints without offsets, axis conversion, limits, and pose alignment.",
         ],
@@ -317,6 +322,7 @@ def prepare_retarget_ready(
     if dmpls is not None:
         packaged["dmpls"] = dmpls.astype(np.float64)
 
+    # once out npz is ready then this function defined previously will save it into more Isaac Lab friendly ready format with minimal changes.
     np.savez_compressed(out_npz, **packaged)
 
     metadata = {
@@ -336,7 +342,7 @@ def prepare_retarget_ready(
             "json_path": str(out_json.resolve()),
             "target_fps": out_fps,
             "num_frames": num_frames,
-            "duration_s": float(num_frames / out_fps),
+            "duration_s": float((num_frames - 1) / out_fps) if num_frames > 1 else 0.0,
         },
         "amass_layout": {
             "poses_shape_after_trim_before_resample": [int(end_frame - start_frame), int(source["poses"].shape[1])],
@@ -356,14 +362,6 @@ def prepare_retarget_ready(
             "smplh_left_hand_joints": body_names["left_hand_joint_names"],
             "smplh_right_hand_joints": body_names["right_hand_joint_names"],
         },
-        "g1_mapping_template": mapping_template,
-        "retargeting_next_steps": [
-            "Load your exact G1 asset in Isaac Lab and print robot.data.joint_names or robot.dof_names.",
-            "Create a final mapping file from the G1 joint list to the relevant AMASS body joints.",
-            "Apply axis sign fixes and neutral pose offsets per mapped joint.",
-            "Clamp to G1 joint limits before playback or policy training.",
-            "Start with hips, knees, ankles, shoulders, elbows, and a reduced torso; leave hands for later.",
-        ],
     }
 
     with out_json.open("w", encoding="utf-8") as f:
@@ -394,6 +392,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_TARGET_FPS,
         help="Target output FPS for resampling. Defaults to 60.",
     )
+    # For trimming the motion clips or returning to pick different selected motions if the ones chosen do no train well.
     parser.add_argument(
         "--trim-start-s",
         type=float,
@@ -406,16 +405,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional end time in seconds. If omitted, keep until the end.",
     )
-    parser.add_argument(
-        "--no-mirror-category",
-        action="store_true",
-        help="Do not mirror the parent motion category folder into the output directory.",
-    )
+    # Do not normalize X/Y
     parser.add_argument(
         "--keep-root-global",
         action="store_true",
         help="Keep the root translation in the original global frame instead of normalizing X/Y to start at zero.",
     )
+    #Subtract starting Z value 
     parser.add_argument(
         "--flatten-root-z",
         action="store_true",
@@ -440,7 +436,7 @@ def main() -> int:
         target_fps=args.target_fps,
         trim_start_s=args.trim_start_s,
         trim_end_s=args.trim_end_s,
-        mirror_category=not args.no_mirror_category,
+        mirror_category=True,
         normalize_root_xy=not args.keep_root_global,
         keep_vertical_root=not args.flatten_root_z,
     )
