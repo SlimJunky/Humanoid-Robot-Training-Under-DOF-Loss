@@ -1,0 +1,112 @@
+{
+  "source": {
+    "absolute_path": "G:\\Computer Science And AI WORK\\Computer Science And AI 4th Year\\PROB - Projects & Dissertation\\MAIN PROJECT CODE\\Humanoid_Robot_Training_Under_DOF_Loss\\data\\selected_data\\CMU_Selected_Motions\\Walk\\37_01_poses_slow_walk.npz",
+    "file_name": "37_01_poses_slow_walk.npz",
+    "category": "Walk"
+  },
+  "trim": {
+    "trim_start_s": 0.0,
+    "trim_end_s": null,
+    "source_num_frames": 511,
+    "source_duration_s": 4.25
+  },
+  "output": {
+    "npz_path": "G:\\Computer Science And AI WORK\\Computer Science And AI 4th Year\\PROB - Projects & Dissertation\\MAIN PROJECT CODE\\Humanoid_Robot_Training_Under_DOF_Loss\\data\\retarget_ready\\Walk\\37_01_poses_slow_walk_retarget_ready.npz",
+    "json_path": "G:\\Computer Science And AI WORK\\Computer Science And AI 4th Year\\PROB - Projects & Dissertation\\MAIN PROJECT CODE\\Humanoid_Robot_Training_Under_DOF_Loss\\data\\retarget_ready\\Walk\\37_01_poses_slow_walk_retarget_ready.json",
+    "target_fps": 60.0,
+    "num_frames": 256,
+    "duration_s": 4.25
+  },
+  "amass_layout": {
+    "poses_shape_after_trim_before_resample": [
+      511,
+      156
+    ],
+    "root_orient_shape": [
+      256,
+      3
+    ],
+    "pose_body_shape": [
+      256,
+      63
+    ],
+    "pose_hand_shape": [
+      256,
+      90
+    ],
+    "root_pos_shape": [
+      256,
+      3
+    ],
+    "betas_shape": [
+      16
+    ],
+    "dmpls_shape": [
+      256,
+      8
+    ]
+  },
+  "normalization": {
+    "normalize_root_xy": true,
+    "keep_vertical_root": true
+  },
+  "joint_names": {
+    "smplh_body_joints": [
+      "left_hip",
+      "right_hip",
+      "spine1",
+      "left_knee",
+      "right_knee",
+      "spine2",
+      "left_ankle",
+      "right_ankle",
+      "spine3",
+      "left_foot",
+      "right_foot",
+      "neck",
+      "left_collar",
+      "right_collar",
+      "head",
+      "left_shoulder",
+      "right_shoulder",
+      "left_elbow",
+      "right_elbow",
+      "left_wrist",
+      "right_wrist"
+    ],
+    "smplh_left_hand_joints": [
+      "left_index1",
+      "left_index2",
+      "left_index3",
+      "left_middle1",
+      "left_middle2",
+      "left_middle3",
+      "left_pinky1",
+      "left_pinky2",
+      "left_pinky3",
+      "left_ring1",
+      "left_ring2",
+      "left_ring3",
+      "left_thumb1",
+      "left_thumb2",
+      "left_thumb3"
+    ],
+    "smplh_right_hand_joints": [
+      "right_index1",
+      "right_index2",
+      "right_index3",
+      "right_middle1",
+      "right_middle2",
+      "right_middle3",
+      "right_pinky1",
+      "right_pinky2",
+      "right_pinky3",
+      "right_ring1",
+      "right_ring2",
+      "right_ring3",
+      "right_thumb1",
+      "right_thumb2",
+      "right_thumb3"
+    ]
+  }
+}
