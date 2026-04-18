@@ -8,7 +8,7 @@ from pathlib import Path
 from isaaclab.app import AppLauncher
 
 
-#  Parser arguments for script running
+#  Parser arguments for script running and output save location
 parser = argparse.ArgumentParser(description="Spawn Unitree G1 in a flat world and dump articulation info.")
 parser.add_argument("--out", type=str, default="outputs/g1_asset_dump.json", help="Path to output JSON dump.")
 parser.add_argument("--stay-open", action="store_true", help="Keep Isaac Sim open after dumping info.")
