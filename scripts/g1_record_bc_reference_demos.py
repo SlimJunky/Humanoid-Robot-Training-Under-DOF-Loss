@@ -23,7 +23,7 @@ def as_json_str(obj: dict[str, Any]) -> str:
 
 
 def compute_joint_velocities(joint_targets: np.ndarray, fps: float) -> np.ndarray:
-    """Finite-difference joint velocities for [T, J] joint targets."""
+    '''Finite-difference joint velocities for [T, J] joint targets.'''
     if joint_targets.ndim != 2:
         raise ValueError(f"Expected joint_targets shape [T, J], got {joint_targets.shape}")
     dt = 1.0 / fps
@@ -45,10 +45,23 @@ def build_obs(
     phase: np.ndarray,
     include_phase: bool,
 ) -> np.ndarray:
+    """Build low-dimensional proprioceptive observation."""
     pieces = [q.astype(np.float32), qd.astype(np.float32)]
     if include_phase:
         pieces.append(phase[:, None].astype(np.float32))
     return np.concatenate(pieces, axis=1)
+
+def normalize_actions(actions: np.ndarray, action_lo: np.ndarray, action_hi: np.ndarray) -> np.ndarray:
+    '''Map raw joint targets to [-1, 1] using per-dimension limits. This is required for robomimic so made this function and its denormalizing'''
+    denom = action_hi - action_lo
+    # Avoid divide-by-zero if any range is degenerate
+    denom = np.where(np.abs(denom) < 1e-8, 1.0, denom)
+    normed = 2.0 * (actions - action_lo[None, :]) / denom[None, :] - 1.0
+    return np.clip(normed, -1.0, 1.0).astype(np.float32)
+
+def denormalize_actions(actions_norm: np.ndarray, action_lo: np.ndarray, action_hi: np.ndarray) -> np.ndarray:
+    '''Map normalized [-1, 1] actions back to raw joint targets.'''
+    return (((actions_norm + 1.0) * 0.5) * (action_hi - action_lo)[None, :] + action_lo[None, :]).astype(np.float32)
 
 '''what generates my one demonstration episode from mapped reference motion. This forces BC teacher as taken from Isaac Sim docs to be:
 given the current robot state, predict the next desired joint target. robomimic expects trajectory-like fields in dataset
@@ -57,11 +70,14 @@ rwards are one. dones are set to True and states as dummy zero array.'''
 def make_rollout(
     joint_targets: np.ndarray,
     fps: float,
+    action_lo: np.ndarray,
+    action_hi: np.ndarray,
     start_idx: int = 0,
     speed_scale: float = 1.0,
     obs_noise_std: float = 0.0,
     action_noise_std: float = 0.0,
     include_phase: bool = True,
+    normalize_action_targets: bool = True,
 ) -> dict[str, np.ndarray]:
     '''Generate one reference-driven demonstration rollout from mapped joint targets.
     This treats the mapped motion as the teacher. The actions are the next desired joint
@@ -90,13 +106,20 @@ def make_rollout(
     # State at time t predicts action for time t+1
     obs = build_obs(q_seq[:-1], qd_seq[:-1], phase[:-1], include_phase)
     next_obs = build_obs(q_seq[1:], qd_seq[1:], phase[1:], include_phase)
-    actions = q_seq[1:].copy().astype(np.float32)
+    raw_actions = q_seq[1:].copy().astype(np.float32)
+    if normalize_action_targets:
+        actions = normalize_actions(raw_actions, action_lo, action_hi)
+    else:
+        actions = raw_actions
 
     if obs_noise_std > 0.0:
         obs += np.random.normal(0.0, obs_noise_std, size=obs.shape).astype(np.float32)
         next_obs += np.random.normal(0.0, obs_noise_std, size=next_obs.shape).astype(np.float32)
+
     if action_noise_std > 0.0:
         actions += np.random.normal(0.0, action_noise_std, size=actions.shape).astype(np.float32)
+        if normalize_action_targets:
+            actions = np.clip(actions, -1.0, 1.0).astype(np.float32)
 
     rewards = np.ones((actions.shape[0],), dtype=np.float32)
     dones = np.zeros((actions.shape[0],), dtype=np.bool_)
@@ -121,14 +144,17 @@ def write_robomimic_hdf5(
     action_keys: list[str],
     obs_keys: list[str],
 ) -> None:
+    # Write a robomimic-style HDF5 dataset.
     ensure_dir(output_hdf5.parent)
     with h5py.File(output_hdf5, "w") as f:
         data_grp = f.create_group("data")
         data_grp.attrs["env_args"] = as_json_str(env_args)
         total = 0
+
         for i, demo in enumerate(demos):
             demo_grp = data_grp.create_group(f"demo_{i}")
             demo_grp.attrs["num_samples"] = int(demo["actions"].shape[0])
+
             demo_grp.create_dataset("actions", data=demo["actions"], compression="gzip")
             demo_grp.create_dataset("rewards", data=demo["rewards"], compression="gzip")
             demo_grp.create_dataset("dones", data=demo["dones"], compression="gzip")
@@ -136,10 +162,10 @@ def write_robomimic_hdf5(
 
             obs_grp = demo_grp.create_group("obs")
             next_obs_grp = demo_grp.create_group("next_obs")
-            for key in obs_keys:
-                obs_grp.create_dataset(key, data=demo["obs"], compression="gzip")
-                next_obs_grp.create_dataset(key, data=demo["next_obs"], compression="gzip")
-                break  # single low-dim obs key
+
+            obs_key = obs_keys[0]
+            obs_grp.create_dataset(obs_key, data=demo["obs"], compression="gzip")
+            next_obs_grp.create_dataset(obs_key, data=demo["next_obs"], compression="gzip")
 
             total += int(demo["actions"].shape[0])
 
@@ -184,11 +210,16 @@ def main():
         default=0.05,
         help="Uniform playback-speed jitter fraction, e.g. 0.05 => sample in [0.95, 1.05].",
     )
-    #NORMALZIED MOTION PHASE IMPORTANT. ROBOMIMIC EXPECTS NORMALIZED MOTION here.
+    #NORMALZIED MOTION PHASE IMPORTANT. ROBOMIMIC EXPECTS NORMALIZED MOTION START ASWELL
     parser.add_argument(
         "--include-phase",
         action="store_true",
         help="Include normalized motion phase in low-dim observations.",
+    )
+    parser.add_argument(
+        "--no-normalize-actions",
+        action="store_true",
+        help="Store raw joint-target actions instead of normalized [-1, 1] actions.",
     )
     # Will generate tons of reference motions at "random" based on numpy random seed function
     parser.add_argument(
@@ -211,6 +242,16 @@ def main():
         joint_targets = np.asarray(data["joint_targets"], dtype=np.float32)
         joint_names = [str(x) for x in data["joint_names"].tolist()]
         category = str(np.asarray(data["category"]).item()) if "category" in data else "unknown"
+
+        if "soft_joint_lower" not in data or "soft_joint_upper" not in data:
+            raise KeyError(
+                "Mapped npz must contain 'soft_joint_lower' and 'soft_joint_upper' "
+                "for action normalization."
+            )
+
+        action_lo = np.asarray(data["soft_joint_lower"], dtype=np.float32)
+        action_hi = np.asarray(data["soft_joint_upper"], dtype=np.float32)
+
         if "source_fps" in data:
             fps = float(np.asarray(data["source_fps"]).item())
         elif "time_s" in data and len(data["time_s"]) > 1:
@@ -229,30 +270,41 @@ def main():
             make_rollout(
                 joint_targets=joint_targets,
                 fps=fps,
+                action_lo=action_lo,
+                action_hi=action_hi,
                 start_idx=start_idx,
                 speed_scale=speed_scale,
                 obs_noise_std=args.obs_noise_std,
                 action_noise_std=args.action_noise_std,
                 include_phase=args.include_phase,
+                normalize_action_targets=not args.no_normalize_actions,
             )
         )
 
     obs_dim = demos[0]["obs"].shape[1]
     act_dim = demos[0]["actions"].shape[1]
 
+    '''Metadata stored in HDF5 so training & evaluation code knows what environment dataset belongs to. Robomimics environment metadata requirements'''
     env_args = {
-        "type": 2,
-        "env_name": "IsaacLabG1ReferenceBC",
+        "env_name": "IsaacLabG1ReferenceBC", #Environment ID
+        "env_type": 2,
+        "type": 2, #correct environment wrapper class for custom gym-style environment
         "env_version": "1.0",
         "env_kwargs": {
             "robot": "G1_MINIMAL_CFG",
             "category": category,
-            "obs_key": "proprio",
-            "obs_dim": obs_dim,
-            "act_dim": act_dim,
+            "obs_key": "proprio", #name of observation entry inside. low-dimension proprioception of joint positions and joint velocities.
+            "obs_dim": obs_dim, # size of observation vector
+            "act_dim": act_dim, # size of action vector
             "joint_names": joint_names,
             "teacher": "retargeted_reference_motion",
             "source_mapped_npz": str(mapped_path.resolve()),
+            "actions_normalized": not args.no_normalize_actions,
+            "action_normalization": {
+                "method": "per_joint_soft_limit_affine_map" if not args.no_normalize_actions else "none",
+                "low": action_lo.tolist(),
+                "high": action_hi.tolist(),
+            },
             "notes": (
                 "Reference-driven BC dataset generated from mapped G1 motion. "
                 "This is suitable as a custom robomimic-style low-dimensional dataset, "
@@ -282,6 +334,9 @@ def main():
         "obs_noise_std": args.obs_noise_std,
         "action_noise_std": args.action_noise_std,
         "speed_jitter": args.speed_jitter,
+        "actions_normalized": not args.no_normalize_actions,
+        "action_low": action_lo.tolist(),
+        "action_high": action_hi.tolist(),
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -290,6 +345,7 @@ def main():
     print(f"Num demos          : {args.num_demos}")
     print(f"Obs dim            : {obs_dim}")
     print(f"Action dim         : {act_dim}")
+    print(f"Actions normalized : {not args.no_normalize_actions}")
     return 0
 
 

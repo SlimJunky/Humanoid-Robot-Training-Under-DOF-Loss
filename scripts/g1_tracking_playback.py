@@ -171,9 +171,7 @@ def main():
         robot.update(sim_dt)
         step_count += 1
 
-
 if __name__ == "__main__":
-    import traceback
     try:
         print("[CHK] entering main")
         main()
