@@ -49,6 +49,7 @@ DEFAULT_MAPPING_SPEC: dict[str, dict[str, Any]] = {
         "source_joint": "spine3",
         "source_axis": 0, # Which axis
         "scale": 0.30, # How large
+        
         "sign": 1.0, # Whether to flip mapping
         "offset_mode": "add_to_default",
         "notes": "First-pass torso bend from spine3 axis 0.",
