@@ -3,6 +3,8 @@ Take the motion policy and make it play repeatedly to gauge movement before RL t
 the need for the wrapper. Rebuilds same observation format used during BC training, ask learned policy for next action each sim step, converts that action back
 into real joint targets and sends the targets to the Unitree G1 robot in the simulation.'''
 
+'''Had to create a in WSL a way to export a plain PyTorch\TorchScript policy then load that exported file policy in this external project because Robomimic 
+struggled to have even its simple packages work within the conda environment on Windows.'''
 from __future__ import annotations
 
 import argparse
@@ -18,7 +20,7 @@ from isaaclab.app import AppLauncher
 #Parser Arguments
 
 parser = argparse.ArgumentParser(description="Closed-loop BC policy playback for G1 in Isaac Lab.")
-parser.add_argument("bc_ckpt", type=str, help="Path to robomimic BC checkpoint .pth")
+parser.add_argument("bc_ckpt", type=str, help="Path to exported TorchScript BC policy checkpoint .pt")
 parser.add_argument("bc_meta_json", type=str, help="Path to BC dataset metadata json with action bounds")
 parser.add_argument("--root-height", type=float, default=0.78)
 parser.add_argument("--root-x", type=float, default=0.0)
@@ -26,7 +28,6 @@ parser.add_argument("--root-y", type=float, default=0.0)
 parser.add_argument("--gait-period-s", type=float, default=4.25, help="Phase cycle period in seconds") # Mess around with phase gait for best start and cycle
 parser.add_argument("--fall-reset-height", type=float, default=0.45, help="Reset if root height falls below this")
 parser.add_argument("--debug-every", type=int, default=120, help="Print debug info every N sim steps")
-AppLauncher.add_app_launcher_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -39,7 +40,7 @@ from isaaclab.assets import Articulation
 from isaaclab.sim import SimulationCfg, SimulationContext
 from isaaclab_assets import G1_MINIMAL_CFG
 
-import robomimic.utils.file_utils as FileUtils
+
 
 
 # set joint positions, base root in isaac lab and resets articulation state so every reset puts robot in clean starting pose
@@ -59,6 +60,7 @@ def reset_robot(robot: Articulation, default_joint_pos_np: np.ndarray, root_x: f
 
 
 def build_proprio(q: np.ndarray, qd: np.ndarray, phase: float) -> np.ndarray:
+    '''Build the same [q, qd, phase] observation used during BC training.'''
     return np.concatenate([q, qd, np.array([phase], dtype=np.float32)], axis=0).astype(np.float32)
 
 
@@ -94,17 +96,20 @@ def main():
     joint_names_file = meta["joint_names"]
     action_lo = np.asarray(meta["action_low"], dtype=np.float32)
     action_hi = np.asarray(meta["action_high"], dtype=np.float32)
+    obs_dim = int(meta.get("obs_dim", 75))
+    act_dim = int(meta.get("act_dim", len(joint_names_file)))
+    
 
     print(f"[INFO] Loaded metadata joint count: {len(joint_names_file)}")
+    print(f"[INFO] obs_dim={obs_dim}, act_dim={act_dim}")
     print(f"[INFO] Action bounds shape: lo={action_lo.shape}, hi={action_hi.shape}")
     print(f"[INFO] Action low range : min={action_lo.min():+.4f}, max={action_lo.max():+.4f}")
     print(f"[INFO] Action high range: min={action_hi.min():+.4f}, max={action_hi.max():+.4f}")
 
-    policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=str(ckpt_path), device=args_cli.device)
-
-    print("[INFO] Robomimic policy loaded successfully.")
-    print(f"[INFO] Checkpoint dict keys: {list(ckpt_dict.keys())[:10]}")
-
+    #Load torch policy model.
+    policy = torch.jit.load(str(ckpt_path), map_location=args_cli.device)
+    policy.eval()
+    print("[INFO] TorchScript BC policy loaded successfully.")
 
     sim_cfg = SimulationCfg(dt=1.0 / 120.0, device=args_cli.device)
     sim = SimulationContext(sim_cfg)
@@ -133,7 +138,6 @@ def main():
     # Joint order safety check making sure the G1 in Isaac Lab and G1 perceived from BC dataset have the right joint order.
     # BC model needs to output targets for right joints to follow correct motion policy behavior.
     robot_joint_names = list(robot.data.joint_names)
-
     print(f"[INFO] Robot joint count: {len(robot_joint_names)}")
     print(f"[INFO] First 10 robot joints: {robot_joint_names[:10]}")
 
@@ -149,11 +153,12 @@ def main():
     
     print("[INFO] Joint order check passed.")
 
-    # starting from all zero joint or reset may be incorrect to match stable standing pose may need to tune for start.
-    default_joint_pos_np = np.zeros((len(joint_names_file),), dtype=np.float32)
-    print(f"[INFO] Reset joint pose uses zeros. shape={default_joint_pos_np.shape}")
+    # starting from all zero joint or robot default joint reset may be incorrect to match stable standing pose may need to tune for start.
+    default_joint_pos_np = robot.data.default_joint_pos[0].detach().cpu().numpy().astype(np.float32)
+    print(f"[INFO] Reset joint pose uses initial default robot pose. shape={default_joint_pos_np.shape}")
 
     reset_robot(robot, default_joint_pos_np, args_cli.root_x, args_cli.root_y, args_cli.root_height)
+    robot.update(sim.get_physics_dt())
     print(f"[INFO] Initial reset at x={args_cli.root_x:.3f}, y={args_cli.root_y:.3f}, z={args_cli.root_height:.3f}")
 
     sim_dt = sim.get_physics_dt()
@@ -190,31 +195,53 @@ def main():
 
         # build policy observation. recreat observation format the policy expects
         obs_vec = build_proprio(q, qd, phase)
-        obs = {"proprio": torch.from_numpy(obs_vec[None, :]).to(robot.device)} # builds batch dimension that passes observation in robomimic policy
+        # builds batch dimension that passes observation in robomimic policy
         #policy output is assumed as normalized 37-dim action vector.
+        obs_tensor = torch.from_numpy(obs_vec[None, :]).to(robot.device)
 
         with torch.no_grad():
-            action_norm = policy(obs)
-            if isinstance(action_norm, torch.Tensor):
-                action_norm = action_norm.detach().cpu().numpy()[0]
-            else:
-                action_norm = np.asarray(action_norm)[0]
+            action_norm = policy(obs_tensor)
+            #robust to different TorchScript return styles
+            if isinstance(action_norm, (tuple, list)):
+                action_norm = action_norm[0]
+            if not isinstance(action_norm, torch.Tensor):
+                action_norm = torch.as_tensor(action_norm, device=robot.device)
+
+            action_norm = action_norm.detach().cpu().numpy()[0]
+        
+        # Defensive clipping in normalized action space
+        action_norm = np.clip(action_norm, -1.0, 1.0)
+
 
         # converts the normalized policy output used in robomimic BC dataset demo back into real joint target ranges.
         q_target = denormalize_actions(action_norm, action_lo, action_hi)
+        q_target = np.clip(q_target, action_lo, action_hi)
         q_target_torch = torch.tensor(q_target, dtype=torch.float32, device=robot.device).unsqueeze(0)
 
+        # Debug prints
+        if step_idx == 0 or (args_cli.debug_every > 0 and step_idx % args_cli.debug_every == 0):
+            root_pos = robot.data.root_pos_w[0].detach().cpu().numpy()
+            root_lin_vel = robot.data.root_lin_vel_w[0].detach().cpu().numpy()
+
+            print(
+                f"[DBG] step={step_idx} phase={phase:.3f} root_z={root_z:.3f} "
+                f"obs[min={obs_vec.min():+.4f}, max={obs_vec.max():+.4f}, mean={obs_vec.mean():+.4f}] "
+                f"act_norm[min={action_norm.min():+.4f}, max={action_norm.max():+.4f}, mean={action_norm.mean():+.4f}] "
+                f"q_target[min={q_target.min():+.4f}, max={q_target.max():+.4f}, mean={q_target.mean():+.4f}]"
+            )
+            print(
+                f"[DBG] root_pos=({root_pos[0]:+.3f}, {root_pos[1]:+.3f}, {root_pos[2]:+.3f}) "
+                f"root_lin_vel=({root_lin_vel[0]:+.3f}, {root_lin_vel[1]:+.3f}, {root_lin_vel[2]:+.3f})"
+            )
+            print_joint_sample("current q", q, joint_names_file, sample_joint_names)
+            print_joint_sample("current qd", qd, joint_names_file, sample_joint_names)
+            print_joint_sample("policy q_target", q_target, joint_names_file, sample_joint_names)
 
 
-
-
-
-
-
-
-        
+        #Apply targets and step sim
         robot.set_joint_position_target(q_target_torch)
         robot.write_data_to_sim()
+
         sim.step()
         robot.update(sim_dt)
 
