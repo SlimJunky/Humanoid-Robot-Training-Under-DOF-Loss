@@ -1,11 +1,11 @@
 
+from __future__ import annotations
+
 '''Based on G1 dump data and retarget ready json run this to created first_pass .npz and first_pass .json to load retarget-ready walk file
 load the dumped G1 joint order and soft limit and start every frame from G1 default joint pose. Clips mapped joints to expected minimal G1 soft limits
 Saves the resulting G1 joint targets. Generates a first pass .npz file where one row per frame and one column per G1 joint.
 Also generates a JSON file that can be sanity checked for num_frames, num_joints rows and columns and mapped_g1_joints and clip_count.
 Ultimately prepares target file before creating a replay playback ready for demonstrations that need to be provided for Behavioral Cloning'''
-
-from __future__ import annotations
 
 import argparse
 import json

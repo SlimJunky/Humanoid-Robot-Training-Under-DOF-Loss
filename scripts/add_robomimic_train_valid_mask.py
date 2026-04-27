@@ -1,7 +1,9 @@
 
-''' Small script to edit existing HDF5 bc demonstrations data set and add expected ratio of train and valid masks for robo-mimic to use'''
+
 
 from __future__ import annotations
+
+''' Small script to edit existing HDF5 bc demonstrations data set and add expected ratio of train and valid masks for robo-mimic to use'''
 
 import argparse
 from pathlib import Path

@@ -1,3 +1,6 @@
+
+from __future__ import annotations
+
 '''Take the robo-mimic policy checkpoint file and the BC demonstration json action bounds meta data then based off the rollout robomimic script
 Take the motion policy and make it play repeatedly to gauge movement before RL tuning, AKA closed-loop BC policy player. ROllout the policy in Isaac Lab environment without
 the need for the wrapper. Rebuilds same observation format used during BC training, ask learned policy for next action each sim step, converts that action back
@@ -5,7 +8,6 @@ into real joint targets and sends the targets to the Unitree G1 robot in the sim
 
 '''Had to create a in WSL a way to export a plain PyTorch\TorchScript policy then load that exported file policy in this external project because Robomimic 
 struggled to have even its simple packages work within the conda environment on Windows.'''
-from __future__ import annotations
 
 import argparse
 import json
@@ -20,7 +22,7 @@ from isaaclab.app import AppLauncher
 #Parser Arguments
 
 parser = argparse.ArgumentParser(description="Closed-loop BC policy playback for G1 in Isaac Lab.")
-parser.add_argument("bc_ckpt", type=str, help="Path to exported TorchScript BC policy checkpoint .pt")
+parser.add_argument("bc_ckpt", type=str, help="Path to exported TorchScript BC policy .pt")
 parser.add_argument("bc_meta_json", type=str, help="Path to BC dataset metadata json with action bounds")
 parser.add_argument("--root-height", type=float, default=0.78)
 parser.add_argument("--root-x", type=float, default=0.0)
@@ -110,6 +112,30 @@ def main():
     policy = torch.jit.load(str(ckpt_path), map_location=args_cli.device)
     policy.eval()
     print("[INFO] TorchScript BC policy loaded successfully.")
+
+    # Sanity check TorchScript from bugs making sure its right "shape" after processing.
+    with torch.no_grad():
+        test_obs = torch.zeros(1, obs_dim, dtype=torch.float32, device=args_cli.device)
+        test_action = policy(test_obs)
+
+        if isinstance(test_action, (tuple, list)):
+            test_action = test_action[0]
+
+        if not isinstance(test_action, torch.Tensor):
+            raise TypeError(f"Policy output is not a torch.Tensor. Got: {type(test_action)}")
+
+        print(f"[INFO] Policy test output shape: {tuple(test_action.shape)}")
+
+        if test_action.ndim != 2:
+            raise RuntimeError(f"Expected policy output shape [B, act_dim], got {tuple(test_action.shape)}")
+
+        if test_action.shape[1] != act_dim:
+            raise RuntimeError(
+                f"Policy action dimension mismatch. Expected {act_dim}, got {test_action.shape[1]}"
+            )
+
+        if torch.isnan(test_action).any():
+            raise RuntimeError("Policy produced NaN during test inference.")
 
     sim_cfg = SimulationCfg(dt=1.0 / 120.0, device=args_cli.device)
     sim = SimulationContext(sim_cfg)
