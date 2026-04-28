@@ -245,7 +245,7 @@ def main():
 
     last_q_target_torch = None
     last_q_target = default_joint_pos_np.copy()
-    last_action_out = np.zeros((act_dim,), dtype=np.float32)
+    last_policy_out = np.zeros((act_dim,), dtype=np.float32)
 
     print(f"[INFO] Control decimation: {control_decimation}")
     print(f"[INFO] Effective policy rate: {1.0 / (sim_dt * control_decimation):.2f} Hz") # with dt = 1/ 120 then control decimation policy rate of 60.00 Hz
@@ -285,7 +285,7 @@ def main():
             last_policy_out = np.zeros((act_dim,), dtype=np.float32)
             continue
 
-        # build policy observation. recreat observation format the policy expects
+        # build policy observation. recreate observation format the policy expects
         # builds batch dimension that passes observation in robomimic policy
         #policy output is assumed as normalized 37-dim action vector.
 
@@ -306,39 +306,50 @@ def main():
                     f"Observation dimension mismatch. Built {obs_vec.shape[0]}, expected {obs_dim}."
                 )
 
-            obs_tensor = torch.from_numpy(obs_vec[None, :]).to(robot.device)
+            if args_cli.use_reference_actions:
+                # Direct reference playback:
+                # skip the BC policy and directly command the next mapped reference frame.
+                ref_idx = int(round(phase * T_ref)) % T_ref
+                ref_next_idx = (ref_idx + 1) % T_ref
 
-            with torch.no_grad():
-                policy_out = policy(obs_tensor)
+                q_target = reference_joint_targets[ref_next_idx].copy().astype(np.float32)
+                q_target = np.clip(q_target, action_lo, action_hi)
 
-                if isinstance(policy_out, (tuple, list)):
-                    policy_out = policy_out[0]
+                # Only used for debug printing. This is not a real policy output in this mode.
+                policy_out = np.zeros((act_dim,), dtype=np.float32)
 
-                if not isinstance(policy_out, torch.Tensor):
-                    policy_out = torch.as_tensor(policy_out, device=robot.device)
-
-                policy_out = policy_out.detach().cpu().numpy()[0].astype(np.float32)
-
-            if policy_out.shape[0] != act_dim:
-                raise RuntimeError(
-                    f"Policy action dimension mismatch. Got {policy_out.shape[0]}, expected {act_dim}."
-                )
-
-            if actions_normalized:
-                policy_out = np.clip(policy_out, -1.0, 1.0)
-                q_target = denormalize_actions(policy_out, action_lo, action_hi)
             else:
-                q_target = policy_out.astype(np.float32)
+                # Normal BC policy playback.
+                obs_tensor = torch.from_numpy(obs_vec[None, :]).to(robot.device)
 
-            q_target = np.clip(q_target, action_lo, action_hi)
+                with torch.no_grad():
+                    policy_out = policy(obs_tensor)
+
+                    if isinstance(policy_out, (tuple, list)):
+                        policy_out = policy_out[0]
+
+                    if not isinstance(policy_out, torch.Tensor):
+                        policy_out = torch.as_tensor(policy_out, device=robot.device)
+
+                    policy_out = policy_out.detach().cpu().numpy()[0].astype(np.float32)
+
+                if policy_out.shape[0] != act_dim:
+                    raise RuntimeError(
+                        f"Policy action dimension mismatch. Got {policy_out.shape[0]}, expected {act_dim}."
+                    )
+
+                if actions_normalized:
+                    policy_out = np.clip(policy_out, -1.0, 1.0)
+                    q_target = denormalize_actions(policy_out, action_lo, action_hi)
+                else:
+                    q_target = policy_out.astype(np.float32)
+
+                q_target = np.clip(q_target, action_lo, action_hi)
 
             last_policy_out = policy_out.copy()
             last_q_target = q_target.copy()
-            last_q_target_torch = torch.tensor(
-                q_target,
-                dtype=torch.float32,
-                device=robot.device,
-            ).unsqueeze(0)
+            last_q_target_torch = torch.tensor(q_target,dtype=torch.float32, device=robot.device,).unsqueeze(0)
+
 
         else:
             # Hold previous target during intermediate physics step.
