@@ -63,31 +63,31 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
         r"\data\BC_datasets\g1_walk_reference_bc_1024_regular.json"
     )
 
-    # control for Unitree G1 environment motion and spawn height
-    residual_scale: float = 0.25
+    # control for Unitree G1 environment motion and spawn height standard usually constant
     fall_height: float = 0.45
     gait_period_s: float = 4.25
 
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
+    residual_scale: float = 0.25
     target_root_height: float = 0.70
-    rew_pose: float = 0.5
-    rew_vel: float = 0.05
-    rew_bc: float = 0.15 # How much rewards being similar to BC prior
+    rew_pose: float = 0.35
+    rew_vel: float = 0.03
+    rew_bc: float = 0.10 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling
-    rew_upright: float = 4.0
-    rew_height: float = 2.5
+    rew_upright: float = 5.0
+    rew_height: float = 3.0
     rew_alive: float = 1.0
 
     # PENALTY RATES
     penalty_action_rate: float = 0.02
     penalty_joint_vel: float = 0.001
-    penalty_fall: float = 10.0
+    penalty_fall: float = 15.0
 
     # Lateral balance stability terms higher values reward more staying central
-    penalty_lateral_vel: float = 0.5
-    penalty_base_ang_vel: float = 0.05
-    penalty_side_tilt: float = 1.0
+    penalty_lateral_vel: float = 0.75
+    penalty_base_ang_vel: float = 0.10
+    penalty_side_tilt: float = 1.5
 
 
 class G1BCPPOEnv(DirectRLEnv):
