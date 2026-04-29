@@ -4,3 +4,4 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gymnasium as gym  # noqa: F401
+from . import g1_bc_ppo # grab environment from this directory looking for g1_bc_ppo_env.py
