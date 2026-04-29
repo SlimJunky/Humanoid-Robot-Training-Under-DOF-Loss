@@ -10,7 +10,7 @@
 ##
 
 from isaaclab_tasks.utils import import_packages
-from . import g1_bc_ppo # grab environment from this directory looking for g1_bc_ppo_env.py
+from . import direct
 
 # The blacklist is used to prevent importing configs from sub-packages
 _BLACKLIST_PKGS = ["utils", ".mdp"]

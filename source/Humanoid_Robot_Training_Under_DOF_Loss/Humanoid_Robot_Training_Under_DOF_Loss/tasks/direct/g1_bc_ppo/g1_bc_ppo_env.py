@@ -59,19 +59,24 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
         r"\data\BC_datasets\g1_walk_reference_bc_1024_regular.json"
     )
 
-    # control
+    # control for Unitree G1 environment motion and spawn height
     residual_scale: float = 0.25
     target_root_height: float = 0.70
     fall_height: float = 0.45
     gait_period_s: float = 4.25
 
-    # reward weights
-    rew_pose: float = 1.5
-    rew_bc: float = 0.75
-    rew_upright: float = 2.0
-    rew_height: float = 1.0
-    rew_alive: float = 0.5
+    # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
+    #rew_pose: float = 1.5
+    rew_pose: float = 0.75
+    rew_vel: float = 0.10
+    rew_bc: float = 0.25
 
+    # Higher values here prioritize staying upright and not falling
+    rew_upright: float = 3.0
+    rew_height: float = 2.0
+    rew_alive: float = 1.0
+
+    # PENALTY
     penalty_action_rate: float = 0.02
     penalty_joint_vel: float = 0.001
     penalty_fall: float = 5.0
@@ -129,6 +134,25 @@ class G1BCPPOEnv(DirectRLEnv):
 
         self.q_bc = torch.zeros_like(self.actions)
         self.q_target = torch.zeros_like(self.actions)
+
+        # Episode logging buffers for TensorBoard. Debugging to measure training progress
+        self._episode_sums = {
+            "pose": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "bc": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "upright": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "alive": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "action_rate_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "joint_vel_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "fall_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "total": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "episode_length": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "root_height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "pose_error": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "bc_residual_l2": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+        }
+
 
     #Simulation bare bones isaaclab flat environment
     def _setup_scene(self):
@@ -193,6 +217,7 @@ class G1BCPPOEnv(DirectRLEnv):
     '''Key piece of code to tune to determine with pytorch the reward functions for PPO RL algorithm and what should be rewarded for walking policy.
     rewards robot for staying close to the reference and close to BC prior. Maintaining height and avoiding excessive action/joint velocity.
     Training behaviour is shaped here'''
+
     def _get_rewards(self) -> torch.Tensor:
         q = self.robot.data.joint_pos
         qd = self.robot.data.joint_vel
@@ -202,32 +227,66 @@ class G1BCPPOEnv(DirectRLEnv):
         q_ref = self.reference_q[ref_idx]
         qd_ref = self.reference_qd[ref_idx]
 
+        pose_error = torch.mean(torch.abs(q - q_ref), dim=-1)
         pose_reward = torch.exp(-4.0 * torch.mean((q - q_ref) ** 2, dim=-1))
+
+        vel_error = torch.mean(torch.abs(qd - qd_ref), dim=-1)
         vel_reward = torch.exp(-0.25 * torch.mean((qd - qd_ref) ** 2, dim=-1))
 
-        bc_reward = torch.exp(-4.0 * torch.mean((self.q_target - self.q_bc) ** 2, dim=-1))
+        bc_residual_l2 = torch.mean((self.q_target - self.q_bc) ** 2, dim=-1)
+        bc_reward = torch.exp(-4.0 * bc_residual_l2)
 
         projected_gravity = self.robot.data.projected_gravity_b
-        upright_reward = torch.exp(-4.0 * torch.sum(projected_gravity[:, :2] ** 2, dim=-1))
+        upright_error = torch.sum(projected_gravity[:, :2] ** 2, dim=-1)
+        upright_reward = torch.exp(-4.0 * upright_error)
 
-        height_reward = torch.exp(-20.0 * (root_z - self.cfg.target_root_height) ** 2)
+        height_error = (root_z - self.cfg.target_root_height) ** 2
+        height_reward = torch.exp(-20.0 * height_error)
 
         action_rate_penalty = torch.mean((self.actions - self.prev_actions) ** 2, dim=-1)
         joint_vel_penalty = torch.mean(qd**2, dim=-1)
 
         fallen = root_z < self.cfg.fall_height
 
+        # All based of reward terms better to add G1BCPPOEnvCfg
+        pose_term = self.cfg.rew_pose * pose_reward
+        vel_term = self.cfg.rew_vel * vel_reward
+        bc_term = self.cfg.rew_bc * bc_reward
+        upright_term = self.cfg.rew_upright * upright_reward
+        height_term = self.cfg.rew_height * height_reward
+        alive_term = self.cfg.rew_alive * torch.ones_like(root_z)
+
+        action_rate_term = -self.cfg.penalty_action_rate * action_rate_penalty
+        joint_vel_term = -self.cfg.penalty_joint_vel * joint_vel_penalty
+        fall_term = -self.cfg.penalty_fall * fallen.float()
+
         reward = (
-            self.cfg.rew_alive
-            + self.cfg.rew_pose * pose_reward
-            + 0.25 * vel_reward
-            + self.cfg.rew_bc * bc_reward
-            + self.cfg.rew_upright * upright_reward
-            + self.cfg.rew_height * height_reward
-            - self.cfg.penalty_action_rate * action_rate_penalty
-            - self.cfg.penalty_joint_vel * joint_vel_penalty
-            - self.cfg.penalty_fall * fallen.float()
+            alive_term
+            + pose_term
+            + vel_term
+            + bc_term
+            + upright_term
+            + height_term
+            + action_rate_term
+            + joint_vel_term
+            + fall_term
         )
+
+        # Accumulate episode statistics for TensorBoard logging.
+        self._episode_sums["pose"] += pose_term
+        self._episode_sums["vel"] += vel_term
+        self._episode_sums["bc"] += bc_term
+        self._episode_sums["upright"] += upright_term
+        self._episode_sums["height"] += height_term
+        self._episode_sums["alive"] += alive_term
+        self._episode_sums["action_rate_penalty"] += action_rate_term
+        self._episode_sums["joint_vel_penalty"] += joint_vel_term
+        self._episode_sums["fall_penalty"] += fall_term
+        self._episode_sums["total"] += reward
+        self._episode_sums["episode_length"] += 1.0
+        self._episode_sums["root_height"] += root_z
+        self._episode_sums["pose_error"] += pose_error
+        self._episode_sums["bc_residual_l2"] += bc_residual_l2
 
         self.prev_actions = self.actions.clone()
 
@@ -245,11 +304,11 @@ class G1BCPPOEnv(DirectRLEnv):
 
         return fallen, time_out
 
+    '''Reset during training if falls'''
     def _reset_idx(self, env_ids: Sequence[int] | None):
         if env_ids is None:
             env_ids = self.robot._ALL_INDICES
-
-        super()._reset_idx(env_ids)
+        
 
         if isinstance(env_ids, torch.Tensor):
             env_ids_t = env_ids.to(device=self.device)
@@ -257,6 +316,41 @@ class G1BCPPOEnv(DirectRLEnv):
             env_ids_t = torch.tensor(env_ids, dtype=torch.long, device=self.device)
 
         num_reset = len(env_ids_t)
+
+        #Tesnorboard logs record when environments resets after fall or timeout useful for understanding balance training
+        if num_reset > 0 and hasattr(self, "_episode_sums"):
+            extras = {}
+
+            ep_len = torch.clamp(self._episode_sums["episode_length"][env_ids_t], min=1.0)
+
+            for key, value in self._episode_sums.items():
+                if key == "episode_length":
+                    continue
+
+                episodic_avg = torch.mean(value[env_ids_t] / ep_len)
+                extras[f"Episode/{key}"] = episodic_avg.item()
+
+
+
+            fallen_count = torch.count_nonzero(self.reset_terminated[env_ids_t]).item()
+            timeout_count = torch.count_nonzero(self.reset_time_outs[env_ids_t]).item()
+
+            extras["Episode/mean_length_steps"] = torch.mean(ep_len).item()
+            extras["Episode/mean_length_seconds"] = torch.mean(ep_len * self.step_dt).item()
+            extras["Episode_Termination/fallen"] = fallen_count
+            extras["Episode_Termination/time_out"] = timeout_count
+            extras["Episode_Termination/fallen_rate"] = fallen_count / max(num_reset, 1)
+            extras["Episode_Termination/time_out_rate"] = timeout_count / max(num_reset, 1)
+
+            self.extras["log"] = extras
+
+            for key in self._episode_sums.keys():
+                self._episode_sums[key][env_ids_t] = 0.0
+
+        # Now call the DirectRLEnv reset
+        super()._reset_idx(env_ids_t)
+
+
 
         # Start all envs from reference frame 0 first. Later, randomize this for robustness when learning
         joint_pos = self.reference_q[0].unsqueeze(0).repeat(num_reset, 1)
