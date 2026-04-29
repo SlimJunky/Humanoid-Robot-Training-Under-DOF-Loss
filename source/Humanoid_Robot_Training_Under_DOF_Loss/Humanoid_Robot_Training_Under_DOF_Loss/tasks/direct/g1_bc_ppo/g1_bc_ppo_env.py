@@ -29,9 +29,13 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     action_space = 37
 
     # Observation:
-    # q(37) + qd(37) + phase(1) + root angular velocity(3)
-    # + projected gravity(3) + previous action(37)
-    observation_space = 118
+    # q(37) + qd(37) + phase(1)
+    # + root angular velocity(3)
+    # + projected gravity(3)
+    # + root linear velocity(3)
+    # + root height(1)
+    # + previous action(37)
+    observation_space = 122
     state_space = 0
 
     # simulation
@@ -48,7 +52,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # robot
     robot_cfg: ArticulationCfg = G1_MINIMAL_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
-    # files
+    # files, change these to match external project location of the base path
     bc_policy_path: str = (
         r"C:\MAIN PROJECT CODE\Humanoid_Robot_Training_Under_DOF_Loss"
         r"\robomimic_WSL\bc_walking_policy_checkpoints\g1_bc_walk_V1\g1_model_epoch_81_best.pt"
@@ -61,25 +65,29 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # control for Unitree G1 environment motion and spawn height
     residual_scale: float = 0.25
-    target_root_height: float = 0.70
     fall_height: float = 0.45
     gait_period_s: float = 4.25
 
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
-    #rew_pose: float = 1.5
-    rew_pose: float = 0.75
-    rew_vel: float = 0.10
-    rew_bc: float = 0.25
+    target_root_height: float = 0.70
+    rew_pose: float = 0.5
+    rew_vel: float = 0.05
+    rew_bc: float = 0.15 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling
-    rew_upright: float = 3.0
-    rew_height: float = 2.0
+    rew_upright: float = 4.0
+    rew_height: float = 2.5
     rew_alive: float = 1.0
 
-    # PENALTY
+    # PENALTY RATES
     penalty_action_rate: float = 0.02
     penalty_joint_vel: float = 0.001
-    penalty_fall: float = 5.0
+    penalty_fall: float = 10.0
+
+    # Lateral balance stability terms higher values reward more staying central
+    penalty_lateral_vel: float = 0.5
+    penalty_base_ang_vel: float = 0.05
+    penalty_side_tilt: float = 1.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -151,6 +159,11 @@ class G1BCPPOEnv(DirectRLEnv):
             "root_height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "pose_error": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "bc_residual_l2": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "lateral_vel_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "base_ang_vel_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "side_tilt_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "lateral_velocity": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "base_ang_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
 
@@ -199,6 +212,8 @@ class G1BCPPOEnv(DirectRLEnv):
 
         root_ang_vel_b = self.robot.data.root_ang_vel_b
         projected_gravity_b = self.robot.data.projected_gravity_b
+        root_lin_vel_b = self.robot.data.root_lin_vel_b
+        root_z = self.robot.data.root_pos_w[:, 2].unsqueeze(-1)
 
         obs = torch.cat(
             [
@@ -207,6 +222,8 @@ class G1BCPPOEnv(DirectRLEnv):
                 self.phase.unsqueeze(-1),
                 root_ang_vel_b,
                 projected_gravity_b,
+                root_lin_vel_b,
+                root_z,
                 self.prev_actions,
             ],
             dim=-1,
@@ -246,6 +263,18 @@ class G1BCPPOEnv(DirectRLEnv):
         action_rate_penalty = torch.mean((self.actions - self.prev_actions) ** 2, dim=-1)
         joint_vel_penalty = torch.mean(qd**2, dim=-1)
 
+        root_lin_vel_b = self.robot.data.root_lin_vel_b
+        root_ang_vel_b = self.robot.data.root_ang_vel_b
+
+        # Sideways drift is bad during survival training.
+        lateral_vel_penalty = root_lin_vel_b[:, 1] ** 2
+
+        # Excessive base rotation usually appears before falling.
+        base_ang_vel_penalty = torch.sum(root_ang_vel_b**2, dim=-1)
+
+        # projected_gravity[:, 0] and [:, 1] represent tilt away from upright.
+        side_tilt_penalty = torch.sum(projected_gravity[:, :2] ** 2, dim=-1)
+
         fallen = root_z < self.cfg.fall_height
 
         # All based of reward terms better to add G1BCPPOEnvCfg
@@ -259,6 +288,9 @@ class G1BCPPOEnv(DirectRLEnv):
         action_rate_term = -self.cfg.penalty_action_rate * action_rate_penalty
         joint_vel_term = -self.cfg.penalty_joint_vel * joint_vel_penalty
         fall_term = -self.cfg.penalty_fall * fallen.float()
+        lateral_vel_term = -self.cfg.penalty_lateral_vel * lateral_vel_penalty
+        base_ang_vel_term = -self.cfg.penalty_base_ang_vel * base_ang_vel_penalty
+        side_tilt_term = -self.cfg.penalty_side_tilt * side_tilt_penalty
 
         reward = (
             alive_term
@@ -269,6 +301,9 @@ class G1BCPPOEnv(DirectRLEnv):
             + height_term
             + action_rate_term
             + joint_vel_term
+            + lateral_vel_term
+            + base_ang_vel_term
+            + side_tilt_term
             + fall_term
         )
 
@@ -287,6 +322,11 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["root_height"] += root_z
         self._episode_sums["pose_error"] += pose_error
         self._episode_sums["bc_residual_l2"] += bc_residual_l2
+        self._episode_sums["lateral_vel_penalty"] += lateral_vel_term
+        self._episode_sums["base_ang_vel_penalty"] += base_ang_vel_term
+        self._episode_sums["side_tilt_penalty"] += side_tilt_term
+        self._episode_sums["lateral_velocity"] += root_lin_vel_b[:, 1]
+        self._episode_sums["base_ang_vel"] += torch.mean(torch.abs(root_ang_vel_b), dim=-1)
 
         self.prev_actions = self.actions.clone()
 
