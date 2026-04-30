@@ -93,16 +93,16 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #posture refinement rewards and penalty
     min_good_root_height: float = 0.67
     penalty_low_height: float = 12.0
-    penalty_knee_crouch: float = 0.5
+    penalty_knee_crouch: float = 0.25
     rew_standing_height: float = 1.0
     standing_height_start: float = 0.60
     standing_height_full: float = 0.68
 
     #Walking velocity rewards and penalty
-    target_forward_vel: float = 0.10
-    rew_forward_vel: float = 0.5
-    penalty_backward_vel: float = 1.0
-    penalty_yaw_rate: float = 0.05
+    target_forward_vel: float = 0.03 # m/s movement forward essentially
+    rew_forward_vel: float = 0.20
+    penalty_backward_vel: float = 1.5
+    penalty_yaw_rate: float = 0.10
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -315,11 +315,13 @@ class G1BCPPOEnv(DirectRLEnv):
         # progress matters most early, tracking above smooths it going overboard
         forward_vel_reward = 0.7 * forward_progress_reward + 0.3 * forward_vel_tracking_reward
 
+        #Key balance gate metric introduced to help forward term reward with moving forward while standing upright
+        balance_gate = upright_reward * standing_height_reward
 
         backward_penalty = torch.relu(-forward_vel) ** 2
         yaw_rate_penalty = yaw_rate ** 2
 
-        forward_vel_term = self.cfg.rew_forward_vel * forward_vel_reward
+        forward_vel_term = self.cfg.rew_forward_vel * forward_vel_reward * balance_gate
         backward_term = -self.cfg.penalty_backward_vel * backward_penalty
         yaw_rate_term = -self.cfg.penalty_yaw_rate * yaw_rate_penalty
 
