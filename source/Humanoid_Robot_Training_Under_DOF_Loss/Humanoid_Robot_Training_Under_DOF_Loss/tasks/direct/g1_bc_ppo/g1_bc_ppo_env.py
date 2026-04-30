@@ -87,15 +87,15 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_fall: float = 15.0
 
     # Lateral balance stability terms higher values reward more staying central
-    penalty_lateral_vel: float = 0.75
-    penalty_base_ang_vel: float = 0.10
-    penalty_side_tilt: float = 1.5
+    penalty_lateral_vel: float = 1.0
+    penalty_base_ang_vel: float = 0.15
+    penalty_side_tilt: float = 2.0
 
     #posture refinement rewards and penalty
     min_good_root_height: float = 0.68
-    penalty_low_height: float = 14.0
-    penalty_knee_crouch: float = 2.0
-    rew_standing_height: float = 1.0
+    penalty_low_height: float = 16.0
+    penalty_knee_crouch: float = 2.5
+    rew_standing_height: float = 1.5
     standing_height_start: float = 0.60
     standing_height_full: float = 0.68
 
