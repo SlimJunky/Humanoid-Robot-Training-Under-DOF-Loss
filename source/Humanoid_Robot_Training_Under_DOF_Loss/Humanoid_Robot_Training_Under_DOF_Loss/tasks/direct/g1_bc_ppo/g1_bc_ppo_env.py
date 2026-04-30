@@ -66,14 +66,14 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.25
+    residual_scale: float = 0.15
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
 
-    rew_pose: float = 0.35
+    rew_pose: float = 0.45
     rew_vel: float = 0.03
-    rew_bc: float = 0.15 # How much rewards being similar to BC prior
+    rew_bc: float = 0.20 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling
     rew_upright: float = 5.0
@@ -185,6 +185,8 @@ class G1BCPPOEnv(DirectRLEnv):
             "low_height_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "knee_crouch_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "mean_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "knee_collapse_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "max_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "standing_height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "forward_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "forward_vel_reward": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
@@ -344,6 +346,13 @@ class G1BCPPOEnv(DirectRLEnv):
         # Only penalise crouching beyond a moderate knee bend. This got bumped up as my robot learnt to survive taller and this was too low
         knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.60) ** 2, dim=-1)
 
+        max_knee_angle = torch.max(knee_angles, dim=-1).values
+
+        # Only punish severe knee collapse, not normal walking knee bend.
+        knee_collapse_penalty = torch.mean(torch.relu(knee_angles - self.cfg.knee_collapse_threshold) ** 2, dim=-1,)
+
+        knee_collapse_term = -self.cfg.penalty_knee_collapse * knee_collapse_penalty
+        
         fallen = root_z < self.cfg.fall_height
 
         # All based of reward terms better to add G1BCPPOEnvCfg
@@ -382,6 +391,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + side_tilt_term
             + low_height_term
             + knee_crouch_term
+            + knee_collapse_term
             + backward_term
             + yaw_rate_term
             + fall_term
@@ -411,6 +421,8 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["low_height_penalty"] += low_height_term
         self._episode_sums["knee_crouch_penalty"] += knee_crouch_term
         self._episode_sums["mean_knee_angle"] += mean_knee_angle
+        self._episode_sums["knee_collapse_penalty"] += knee_collapse_term
+        self._episode_sums["max_knee_angle"] += max_knee_angle
         self._episode_sums["forward_vel"] += forward_vel
         self._episode_sums["forward_vel_reward"] += forward_vel_term
         self._episode_sums["backward_penalty"] += backward_term
