@@ -64,7 +64,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     )
 
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
-    
+
     # control for Unitree G1 environment motion and spawn height standard usually constant
     residual_scale: float = 0.25
     target_root_height: float = 0.70
@@ -91,6 +91,14 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_base_ang_vel: float = 0.10
     penalty_side_tilt: float = 1.5
 
+    #posture refinement rewards and penalty
+    min_good_root_height: float = 0.68
+    penalty_low_height: float = 14.0
+    penalty_knee_crouch: float = 2.0
+    rew_standing_height: float = 1.0
+    standing_height_start: float = 0.60
+    standing_height_full: float = 0.68
+
 
 class G1BCPPOEnv(DirectRLEnv):
     cfg: G1BCPPOEnvCfg
@@ -107,6 +115,9 @@ class G1BCPPOEnv(DirectRLEnv):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
         self.joint_names_file = meta["joint_names"]
+
+        self.left_knee_idx = self.joint_names_file.index("left_knee_joint")
+        self.right_knee_idx = self.joint_names_file.index("right_knee_joint")
 
         self.action_low = torch.tensor(meta["action_low"], dtype=torch.float32, device=self.device)
         self.action_high = torch.tensor(meta["action_high"], dtype=torch.float32, device=self.device)
@@ -166,6 +177,10 @@ class G1BCPPOEnv(DirectRLEnv):
             "side_tilt_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "lateral_velocity": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "base_ang_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "low_height_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "knee_crouch_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "mean_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "standing_height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
 
@@ -231,6 +246,13 @@ class G1BCPPOEnv(DirectRLEnv):
             dim=-1,
         )
 
+        #Sanity check right amount of observations in training
+        if obs.shape[-1] != self.cfg.observation_space:
+            raise RuntimeError(
+                f"Observation dimension mismatch. Built {obs.shape[-1]}, "
+                f"expected {self.cfg.observation_space}."
+            )
+
         return {"policy": obs}
 
     '''Key piece of code to tune to determine with pytorch the reward functions for PPO RL algorithm and what should be rewarded for walking policy.
@@ -260,7 +282,10 @@ class G1BCPPOEnv(DirectRLEnv):
         upright_reward = torch.exp(-4.0 * upright_error)
 
         height_error = (root_z - self.cfg.target_root_height) ** 2
-        height_reward = torch.exp(-20.0 * height_error)
+
+        #Height reward was configured here to be more punishing
+        height_reward = torch.exp(-80.0 * height_error)
+        standing_height_reward = torch.clamp((root_z - self.cfg.standing_height_start) / (self.cfg.standing_height_full - self.cfg.standing_height_start), 0.0, 1.0,)
 
         action_rate_penalty = torch.mean((self.actions - self.prev_actions) ** 2, dim=-1)
         joint_vel_penalty = torch.mean(qd**2, dim=-1)
@@ -277,6 +302,16 @@ class G1BCPPOEnv(DirectRLEnv):
         # projected_gravity[:, 0] and [:, 1] represent tilt away from upright.
         side_tilt_penalty = torch.sum(projected_gravity[:, :2] ** 2, dim=-1)
 
+        # Penalise crouched survival below a useful standing height.
+        low_height_penalty = torch.relu(self.cfg.min_good_root_height - root_z)
+
+        # Penalise excessive knee flexing. Positive knee values correspond to bent knees
+        knee_angles = q[:, [self.left_knee_idx, self.right_knee_idx]]
+        mean_knee_angle = torch.mean(knee_angles, dim=-1)
+
+        # Only penalise crouching beyond a moderate knee bend.
+        knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.55) ** 2, dim=-1)
+
         fallen = root_z < self.cfg.fall_height
 
         # All based of reward terms better to add G1BCPPOEnvCfg
@@ -285,6 +320,7 @@ class G1BCPPOEnv(DirectRLEnv):
         bc_term = self.cfg.rew_bc * bc_reward
         upright_term = self.cfg.rew_upright * upright_reward
         height_term = self.cfg.rew_height * height_reward
+        standing_height_term = self.cfg.rew_standing_height * standing_height_reward
         alive_term = self.cfg.rew_alive * torch.ones_like(root_z)
 
         action_rate_term = -self.cfg.penalty_action_rate * action_rate_penalty
@@ -294,6 +330,10 @@ class G1BCPPOEnv(DirectRLEnv):
         base_ang_vel_term = -self.cfg.penalty_base_ang_vel * base_ang_vel_penalty
         side_tilt_term = -self.cfg.penalty_side_tilt * side_tilt_penalty
 
+        low_height_term = -self.cfg.penalty_low_height * low_height_penalty
+        knee_crouch_term = -self.cfg.penalty_knee_crouch * knee_crouch_penalty
+
+        #Key rewards
         reward = (
             alive_term
             + pose_term
@@ -301,11 +341,14 @@ class G1BCPPOEnv(DirectRLEnv):
             + bc_term
             + upright_term
             + height_term
+            + standing_height_term
             + action_rate_term
             + joint_vel_term
             + lateral_vel_term
             + base_ang_vel_term
             + side_tilt_term
+            + low_height_term
+            + knee_crouch_term
             + fall_term
         )
 
@@ -315,6 +358,7 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["bc"] += bc_term
         self._episode_sums["upright"] += upright_term
         self._episode_sums["height"] += height_term
+        self._episode_sums["standing_height"] += standing_height_term
         self._episode_sums["alive"] += alive_term
         self._episode_sums["action_rate_penalty"] += action_rate_term
         self._episode_sums["joint_vel_penalty"] += joint_vel_term
@@ -329,6 +373,9 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["side_tilt_penalty"] += side_tilt_term
         self._episode_sums["lateral_velocity"] += root_lin_vel_b[:, 1]
         self._episode_sums["base_ang_vel"] += torch.mean(torch.abs(root_ang_vel_b), dim=-1)
+        self._episode_sums["low_height_penalty"] += low_height_term
+        self._episode_sums["knee_crouch_penalty"] += knee_crouch_term
+        self._episode_sums["mean_knee_angle"] += mean_knee_angle
 
         self.prev_actions = self.actions.clone()
 
