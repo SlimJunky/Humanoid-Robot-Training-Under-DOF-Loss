@@ -34,6 +34,13 @@ parser.add_argument("--export_io_descriptors", action="store_true", default=Fals
 parser.add_argument(
     "--ray-proc-id", "-rid", type=int, default=None, help="Automatically configured by Ray integration, otherwise None."
 )
+# Custom parser argument to be able to run command pointing at any .pt policy file in any folder 
+parser.add_argument(
+    "--resume_path",
+    type=str,
+    default=None,
+    help="Absolute or relative path to an RSL-RL checkpoint .pt file. Overrides --load_run and --checkpoint.",
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -79,6 +86,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 
 import gymnasium as gym
 import torch
@@ -176,9 +184,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
 
+    
     # save resume path before creating a new log_dir
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+        if args_cli.resume_path is not None:
+            resume_path = Path(args_cli.resume_path).expanduser().resolve()
+            if not resume_path.exists():
+                raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+            resume_path = str(resume_path)
+        else:
+            resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
     # wrap for video recording
     if args_cli.video:
