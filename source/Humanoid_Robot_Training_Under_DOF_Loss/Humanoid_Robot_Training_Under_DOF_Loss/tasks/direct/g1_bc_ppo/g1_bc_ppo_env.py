@@ -71,33 +71,38 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     fall_height: float = 0.55
     gait_period_s: float = 4.25
 
-    
     rew_pose: float = 0.35
     rew_vel: float = 0.03
-    rew_bc: float = 0.10 # How much rewards being similar to BC prior
+    rew_bc: float = 0.15 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling
     rew_upright: float = 5.0
     rew_height: float = 3.0
     rew_alive: float = 1.0
 
-    # PENALTY RATES
+    # PENALTY RATES falling and moving joints out of predicted action
     penalty_action_rate: float = 0.02
     penalty_joint_vel: float = 0.001
     penalty_fall: float = 15.0
 
     # Lateral balance stability terms higher values reward more staying central
-    penalty_lateral_vel: float = 0.75
-    penalty_base_ang_vel: float = 0.10
-    penalty_side_tilt: float = 1.5
+    penalty_lateral_vel: float = 1.0
+    penalty_base_ang_vel: float = 0.15
+    penalty_side_tilt: float = 2.0
 
     #posture refinement rewards and penalty
     min_good_root_height: float = 0.67
-    penalty_low_height: float = 8.0
-    penalty_knee_crouch: float = 1.0
+    penalty_low_height: float = 12.0
+    penalty_knee_crouch: float = 0.5
     rew_standing_height: float = 1.0
     standing_height_start: float = 0.60
     standing_height_full: float = 0.68
+
+    #Walking velocity rewards and penalty
+    target_forward_vel: float = 0.10
+    rew_forward_vel: float = 0.5
+    penalty_backward_vel: float = 1.0
+    penalty_yaw_rate: float = 0.05
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -181,6 +186,10 @@ class G1BCPPOEnv(DirectRLEnv):
             "knee_crouch_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "mean_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "standing_height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "forward_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "forward_vel_reward": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "backward_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "yaw_rate_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
 
@@ -293,6 +302,27 @@ class G1BCPPOEnv(DirectRLEnv):
         root_lin_vel_b = self.robot.data.root_lin_vel_b
         root_ang_vel_b = self.robot.data.root_ang_vel_b
 
+        #forward velocity target
+        forward_vel = root_lin_vel_b[:, 0]
+        yaw_rate = root_ang_vel_b[:, 2]
+
+        # Reward positive forward motion up to target speed.
+        forward_progress_reward = torch.clamp( forward_vel / self.cfg.target_forward_vel, 0.0, 1.0,)
+
+        forward_vel_error = (forward_vel - self.cfg.target_forward_vel) ** 2
+        forward_vel_tracking_reward = torch.exp(-100.0 * forward_vel_error)
+
+        # progress matters most early, tracking above smooths it going overboard
+        forward_vel_reward = 0.7 * forward_progress_reward + 0.3 * forward_vel_tracking_reward
+
+
+        backward_penalty = torch.relu(-forward_vel) ** 2
+        yaw_rate_penalty = yaw_rate ** 2
+
+        forward_vel_term = self.cfg.rew_forward_vel * forward_vel_reward
+        backward_term = -self.cfg.penalty_backward_vel * backward_penalty
+        yaw_rate_term = -self.cfg.penalty_yaw_rate * yaw_rate_penalty
+
         # Sideways drift is bad during survival training.
         lateral_vel_penalty = root_lin_vel_b[:, 1] ** 2
 
@@ -342,6 +372,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + upright_term
             + height_term
             + standing_height_term
+            + forward_vel_term
             + action_rate_term
             + joint_vel_term
             + lateral_vel_term
@@ -349,6 +380,8 @@ class G1BCPPOEnv(DirectRLEnv):
             + side_tilt_term
             + low_height_term
             + knee_crouch_term
+            + backward_term
+            + yaw_rate_term
             + fall_term
         )
 
@@ -376,6 +409,10 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["low_height_penalty"] += low_height_term
         self._episode_sums["knee_crouch_penalty"] += knee_crouch_term
         self._episode_sums["mean_knee_angle"] += mean_knee_angle
+        self._episode_sums["forward_vel"] += forward_vel
+        self._episode_sums["forward_vel_reward"] += forward_vel_term
+        self._episode_sums["backward_penalty"] += backward_term
+        self._episode_sums["yaw_rate_penalty"] += yaw_rate_term
 
         self.prev_actions = self.actions.clone()
 
