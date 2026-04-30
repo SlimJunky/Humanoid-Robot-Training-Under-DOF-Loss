@@ -87,15 +87,15 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_fall: float = 15.0
 
     # Lateral balance stability terms higher values reward more staying central
-    penalty_lateral_vel: float = 1.0
-    penalty_base_ang_vel: float = 0.15
-    penalty_side_tilt: float = 2.0
+    penalty_lateral_vel: float = 0.75
+    penalty_base_ang_vel: float = 0.10
+    penalty_side_tilt: float = 1.5
 
     #posture refinement rewards and penalty
-    min_good_root_height: float = 0.68
-    penalty_low_height: float = 16.0
-    penalty_knee_crouch: float = 2.5
-    rew_standing_height: float = 1.5
+    min_good_root_height: float = 0.67
+    penalty_low_height: float = 8.0
+    penalty_knee_crouch: float = 1.0
+    rew_standing_height: float = 1.0
     standing_height_start: float = 0.60
     standing_height_full: float = 0.68
 
@@ -309,8 +309,8 @@ class G1BCPPOEnv(DirectRLEnv):
         knee_angles = q[:, [self.left_knee_idx, self.right_knee_idx]]
         mean_knee_angle = torch.mean(knee_angles, dim=-1)
 
-        # Only penalise crouching beyond a moderate knee bend.
-        knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.55) ** 2, dim=-1)
+        # Only penalise crouching beyond a moderate knee bend. This got bumped up as my robot learnt to survive taller and this was too low
+        knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.60) ** 2, dim=-1)
 
         fallen = root_z < self.cfg.fall_height
 
