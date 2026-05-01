@@ -87,7 +87,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Lateral balance stability terms higher values reward more staying central
     penalty_lateral_vel: float = 1.0
-    penalty_base_ang_vel: float = 0.20
+    penalty_base_ang_vel: float = 0.25
     penalty_side_tilt: float = 2.0
 
     #posture refinement rewards and penalty
@@ -102,14 +102,17 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     knee_collapse_threshold: float = 0.90
     penalty_knee_collapse: float = 2.0
 
+    # Penalise one knee bending much more than the other during unstable stepping.
+    penalty_knee_asymmetry: float = 0.20
+
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.03 # m/s movement forward essentially
-    rew_forward_vel: float = 0.15
+    rew_forward_vel: float = 0.10
     penalty_backward_vel: float = 2.0
-    penalty_yaw_rate: float = 0.15
+    penalty_yaw_rate: float = 0.20
 
     #Reward specifically lower body movement in a gait cycle
-    rew_lower_body_gait: float = 0.25
+    rew_lower_body_gait: float = 0.10
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -220,6 +223,7 @@ class G1BCPPOEnv(DirectRLEnv):
             "left_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "right_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "knee_asymmetry": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "knee_asymmetry_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "standing_height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "forward_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "forward_vel_reward": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
@@ -228,7 +232,6 @@ class G1BCPPOEnv(DirectRLEnv):
             "lower_body_gait": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "lower_body_error": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
-
 
     #Simulation bare bones isaaclab flat environment
     def _setup_scene(self):
@@ -354,8 +357,6 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # Reward positive forward motion up to target speed. Dont reward standing still, have to keep up motion gait
         forward_progress_reward = torch.clamp( forward_vel / self.cfg.target_forward_vel, 0.0, 1.0,)
-
-
         forward_vel_reward = forward_progress_reward
 
         #Key balance gate metric introduced to help forward term reward with moving forward while standing upright
@@ -380,15 +381,19 @@ class G1BCPPOEnv(DirectRLEnv):
         # Penalise crouched survival below a useful standing height.
         low_height_penalty = torch.relu(self.cfg.min_good_root_height - root_z)
 
-        # Penalise excessive knee flexing. Positive knee values correspond to bent knees
+        # Penalise excessive knee flexing. Penalize too much knee asymmetry that would be expected in a stable walk
         knee_angles = q[:, [self.left_knee_idx, self.right_knee_idx]]
+       
         mean_knee_angle = torch.mean(knee_angles, dim=-1)
+        max_knee_angle = torch.max(knee_angles, dim=-1).values
+
         knee_asymmetry = torch.abs(knee_angles[:, 0] - knee_angles[:, 1])
+        knee_asymmetry_penalty = knee_asymmetry ** 2
+        knee_asymmetry_term = -self.cfg.penalty_knee_asymmetry * knee_asymmetry_penalty
 
         # Only penalise crouching beyond a moderate knee bend. This got bumped up as my robot learnt to survive taller and this was too low
         knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.60) ** 2, dim=-1)
-
-        max_knee_angle = torch.max(knee_angles, dim=-1).values
+       
 
         # Only punish severe knee collapse, not normal walking knee bend.
         knee_collapse_penalty = torch.mean(torch.relu(knee_angles - self.cfg.knee_collapse_threshold) ** 2, dim=-1,)
@@ -434,6 +439,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + low_height_term
             + knee_crouch_term
             + knee_collapse_term
+            + knee_asymmetry_term
             + backward_term
             + yaw_rate_term
             + fall_term
@@ -474,6 +480,7 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["left_knee_angle"] += knee_angles[:, 0]
         self._episode_sums["right_knee_angle"] += knee_angles[:, 1]
         self._episode_sums["knee_asymmetry"] += knee_asymmetry
+        self._episode_sums["knee_asymmetry_penalty"] += knee_asymmetry_term
 
         self.prev_actions = self.actions.clone()
 
