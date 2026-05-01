@@ -98,6 +98,10 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     standing_height_start: float = 0.60
     standing_height_full: float = 0.68
 
+    #Stop total knee collapse when attempting walking gait
+    knee_collapse_threshold: float = 0.90
+    penalty_knee_collapse: float = 2.0
+
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.03 # m/s movement forward essentially
     rew_forward_vel: float = 0.20
