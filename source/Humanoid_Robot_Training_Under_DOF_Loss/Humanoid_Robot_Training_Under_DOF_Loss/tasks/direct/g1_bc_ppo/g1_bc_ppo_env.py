@@ -222,6 +222,8 @@ class G1BCPPOEnv(DirectRLEnv):
             "forward_vel_reward": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "backward_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "yaw_rate_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "lower_body_gait": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "lower_body_error": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
 
@@ -347,11 +349,9 @@ class G1BCPPOEnv(DirectRLEnv):
         forward_vel = root_lin_vel_b[:, 0]
         yaw_rate = root_ang_vel_b[:, 2]
 
-        # Reward positive forward motion up to target speed.
+        # Reward positive forward motion up to target speed. Dont reward standing still, have to keep up motion gait
         forward_progress_reward = torch.clamp( forward_vel / self.cfg.target_forward_vel, 0.0, 1.0,)
 
-        forward_vel_error = (forward_vel - self.cfg.target_forward_vel) ** 2
-        forward_progress_reward = torch.clamp(forward_vel / self.cfg.target_forward_vel, 0.0, 1.0)
 
         forward_vel_reward = forward_progress_reward
 
@@ -443,8 +443,8 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["upright"] += upright_term
         self._episode_sums["height"] += height_term
         self._episode_sums["standing_height"] += standing_height_term
-        self._episode_sums["lower_body_gait"] = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._episode_sums["lower_body_gait"] += lower_body_gait_term
+        self._episode_sums["lower_body_error"] += lower_body_error
         self._episode_sums["alive"] += alive_term
         self._episode_sums["action_rate_penalty"] += action_rate_term
         self._episode_sums["joint_vel_penalty"] += joint_vel_term
@@ -533,8 +533,12 @@ class G1BCPPOEnv(DirectRLEnv):
 
 
 
-        # Start all envs from reference frame 0 first. Later, randomize this for robustness when learning
-        joint_pos = self.reference_q[0].unsqueeze(0).repeat(num_reset, 1)
+        # Start all envs from reference frame 0 first. Later, randomize this for robustness when learning.
+        # Changed this to prevent overfitting first step, randomizing gate phase sequence slightly.
+        phase0 = torch.rand(num_reset, device=self.device) * 0.10
+        ref_idx0 = torch.remainder((phase0 * self.num_ref_frames).long(), self.num_ref_frames)
+
+        joint_pos = self.reference_q[ref_idx0]
         joint_vel = torch.zeros_like(joint_pos)
 
         default_root_state = self.robot.data.default_root_state[env_ids_t].clone()
@@ -545,7 +549,7 @@ class G1BCPPOEnv(DirectRLEnv):
         self.robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids_t)
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids_t)
 
-        self.phase[env_ids_t] = 0.0
+        self.phase[env_ids_t] = phase0
         self.actions[env_ids_t] = 0.0
         self.prev_actions[env_ids_t] = 0.0
         self.q_bc[env_ids_t] = joint_pos
