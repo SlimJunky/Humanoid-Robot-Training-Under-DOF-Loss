@@ -14,6 +14,7 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils import configclass
+from isaaclab.utils.math import quat_rotate_inverse
 
 #Using the G1_MINIMAL for training
 from isaaclab_assets import G1_MINIMAL_CFG
@@ -87,7 +88,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Lateral balance stability terms higher values reward more staying central
     penalty_lateral_vel: float = 1.0
-    penalty_base_ang_vel: float = 0.25
+    penalty_base_ang_vel: float = 0.30
     penalty_side_tilt: float = 2.0
 
     #posture refinement rewards and penalty
@@ -103,16 +104,22 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_knee_collapse: float = 2.0
 
     # Penalise one knee bending much more than the other during unstable stepping.
-    penalty_knee_asymmetry: float = 0.20
+    penalty_knee_asymmetry: float = 0.05
 
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.03 # m/s movement forward essentially
-    rew_forward_vel: float = 0.10
+    rew_forward_vel: float = 0.08
     penalty_backward_vel: float = 2.0
     penalty_yaw_rate: float = 0.20
 
     #Reward specifically lower body movement in a gait cycle
     rew_lower_body_gait: float = 0.10
+
+    # Swing / trailing-foot recovery terms
+    rew_trailing_foot_recovery: float = 0.08
+    rew_swing_foot_clearance: float = 0.04
+    swing_clearance_target: float = 0.035
+    target_swing_foot_forward_vel: float = 0.10
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -192,6 +199,20 @@ class G1BCPPOEnv(DirectRLEnv):
             device=self.device,
         )
 
+        # Foot / ankle body ids for swing-foot recovery rewards.
+        left_foot_ids, left_foot_names = self.robot.find_bodies(".*left_ankle_roll.*")
+        right_foot_ids, right_foot_names = self.robot.find_bodies(".*right_ankle_roll.*")
+
+        if len(left_foot_ids) == 0 or len(right_foot_ids) == 0:
+            raise RuntimeError( "Could not find left/right ankle roll bodies." "Print self.robot.body_names and update the foot body name patterns.")
+
+        self.left_foot_body_id = left_foot_ids[0]
+        self.right_foot_body_id = right_foot_ids[0]
+
+        print(self.robot.body_names)
+        print(f"[INFO] Left foot body: {left_foot_names[0]} id={self.left_foot_body_id}")
+        print(f"[INFO] Right foot body: {right_foot_names[0]} id={self.right_foot_body_id}")
+
 
 
         # Episode logging buffers for TensorBoard. Debugging to measure training progress
@@ -231,6 +252,10 @@ class G1BCPPOEnv(DirectRLEnv):
             "yaw_rate_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "lower_body_gait": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "lower_body_error": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "trailing_foot_recovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "swing_foot_clearance": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "trailing_foot_lift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "trailing_foot_fwd_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
     #Simulation bare bones isaaclab flat environment
@@ -328,8 +353,6 @@ class G1BCPPOEnv(DirectRLEnv):
 
         pose_error = torch.mean(torch.abs(q - q_ref), dim=-1)
         pose_reward = torch.exp(-4.0 * torch.mean((q - q_ref) ** 2, dim=-1))
-
-        vel_error = torch.mean(torch.abs(qd - qd_ref), dim=-1)
         vel_reward = torch.exp(-0.25 * torch.mean((qd - qd_ref) ** 2, dim=-1))
 
         bc_residual_l2 = torch.mean((self.q_target - self.q_bc) ** 2, dim=-1)
@@ -344,6 +367,57 @@ class G1BCPPOEnv(DirectRLEnv):
         #Height reward was configured here to be more punishing
         height_reward = torch.exp(-80.0 * height_error)
         standing_height_reward = torch.clamp((root_z - self.cfg.standing_height_start) / (self.cfg.standing_height_full - self.cfg.standing_height_start), 0.0, 1.0,)
+
+        # ----------------------------------------------------------------------------------------------------------
+        # Trailing-foot recovery reward TOOK LONG TIME, DESIGNED TO HELP LIFT FEAT FOR WALKING GAIT PROPERLY
+        # ----------------------------------------------------------------------------------------------------
+        root_pos_w = self.robot.data.root_pos_w
+        root_quat_w = self.robot.data.root_quat_w
+        root_lin_vel_w = self.robot.data.root_lin_vel_w
+
+        left_foot_pos_w = self.robot.data.body_pos_w[:, self.left_foot_body_id]
+        right_foot_pos_w = self.robot.data.body_pos_w[:, self.right_foot_body_id]
+
+        left_foot_vel_w = self.robot.data.body_lin_vel_w[:, self.left_foot_body_id]
+        right_foot_vel_w = self.robot.data.body_lin_vel_w[:, self.right_foot_body_id]
+
+        # Convert foot positions and velocities to root/body frame.
+        left_foot_pos_b = quat_rotate_inverse(root_quat_w, left_foot_pos_w - root_pos_w)
+        right_foot_pos_b = quat_rotate_inverse(root_quat_w, right_foot_pos_w - root_pos_w)
+
+        left_foot_vel_b = quat_rotate_inverse(root_quat_w, left_foot_vel_w - root_lin_vel_w)
+        right_foot_vel_b = quat_rotate_inverse(root_quat_w, right_foot_vel_w - root_lin_vel_w)
+
+        # Foot with smaller body-frame x is the trailing foot.
+        left_is_trailing = left_foot_pos_b[:, 0] < right_foot_pos_b[:, 0]
+        foot_x_gap = torch.abs(left_foot_pos_b[:, 0] - right_foot_pos_b[:, 0])
+        trailing_gap_gate = torch.clamp(foot_x_gap / 0.10, 0.0, 1.0)
+
+        trailing_foot_fwd_vel = torch.where(left_is_trailing, left_foot_vel_b[:, 0], right_foot_vel_b[:, 0],)
+
+        # Estimate swing lift relative to the lower foot.
+        left_foot_z = left_foot_pos_w[:, 2]
+        right_foot_z = right_foot_pos_w[:, 2]
+        foot_z_min = torch.minimum(left_foot_z, right_foot_z)
+
+        trailing_foot_z = torch.where(left_is_trailing, left_foot_z, right_foot_z,)
+
+        trailing_foot_lift = trailing_foot_z - foot_z_min
+
+        # Reward the trailing foot moving forward relative to the base.
+        trailing_foot_recovery_reward = torch.clamp(trailing_foot_fwd_vel / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
+
+        # Reward a small controlled lift, not a huge kick.
+        swing_foot_clearance_reward = torch.exp(-300.0 * (trailing_foot_lift - self.cfg.swing_clearance_target) ** 2)
+
+        # Only reward swing behaviour while reasonably upright/tall and feet are far apart from each-other in walking trail
+        swing_gate = upright_reward * standing_height_reward * trailing_gap_gate
+
+        trailing_foot_recovery_term = (self.cfg.rew_trailing_foot_recovery* trailing_foot_recovery_reward * swing_gate)
+
+        swing_foot_clearance_term = (self.cfg.rew_swing_foot_clearance * swing_foot_clearance_reward * trailing_foot_recovery_reward * swing_gate)
+
+
 
         action_rate_penalty = torch.mean((self.actions - self.prev_actions) ** 2, dim=-1)
         joint_vel_penalty = torch.mean(qd**2, dim=-1)
@@ -431,6 +505,8 @@ class G1BCPPOEnv(DirectRLEnv):
             + standing_height_term
             + lower_body_gait_term
             + forward_vel_term
+            + trailing_foot_recovery_term
+            + swing_foot_clearance_term
             + action_rate_term
             + joint_vel_term
             + lateral_vel_term
@@ -481,6 +557,10 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["right_knee_angle"] += knee_angles[:, 1]
         self._episode_sums["knee_asymmetry"] += knee_asymmetry
         self._episode_sums["knee_asymmetry_penalty"] += knee_asymmetry_term
+        self._episode_sums["trailing_foot_recovery"] += trailing_foot_recovery_term
+        self._episode_sums["swing_foot_clearance"] += swing_foot_clearance_term
+        self._episode_sums["trailing_foot_lift"] += trailing_foot_lift
+        self._episode_sums["trailing_foot_fwd_vel"] += trailing_foot_fwd_vel
 
         self.prev_actions = self.actions.clone()
 
