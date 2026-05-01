@@ -87,13 +87,13 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Lateral balance stability terms higher values reward more staying central
     penalty_lateral_vel: float = 1.0
-    penalty_base_ang_vel: float = 0.15
+    penalty_base_ang_vel: float = 0.20
     penalty_side_tilt: float = 2.0
 
     #posture refinement rewards and penalty
     min_good_root_height: float = 0.67
     penalty_low_height: float = 12.0
-    penalty_knee_crouch: float = 0.25
+    penalty_knee_crouch: float = 0.10
     rew_standing_height: float = 1.0
     standing_height_start: float = 0.60
     standing_height_full: float = 0.68
@@ -104,9 +104,12 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.03 # m/s movement forward essentially
-    rew_forward_vel: float = 0.20
-    penalty_backward_vel: float = 1.5
-    penalty_yaw_rate: float = 0.10
+    rew_forward_vel: float = 0.15
+    penalty_backward_vel: float = 2.0
+    penalty_yaw_rate: float = 0.15
+
+    #Reward specifically lower body movement in a gait cycle
+    rew_lower_body_gait: float = 0.25
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -164,6 +167,29 @@ class G1BCPPOEnv(DirectRLEnv):
 
         self.q_bc = torch.zeros_like(self.actions)
         self.q_target = torch.zeros_like(self.actions)
+
+        self.lower_body_joint_names = [
+            "left_hip_pitch_joint",
+            "left_hip_roll_joint",
+            "left_hip_yaw_joint",
+            "left_knee_joint",
+            "left_ankle_pitch_joint",
+            "left_ankle_roll_joint",
+            "right_hip_pitch_joint",
+            "right_hip_roll_joint",
+            "right_hip_yaw_joint",
+            "right_knee_joint",
+            "right_ankle_pitch_joint",
+            "right_ankle_roll_joint",
+        ]
+
+        self.lower_body_joint_ids = torch.tensor(
+            [self.joint_names_file.index(name) for name in self.lower_body_joint_names],
+            dtype=torch.long,
+            device=self.device,
+        )
+
+
 
         # Episode logging buffers for TensorBoard. Debugging to measure training progress
         self._episode_sums = {
@@ -283,6 +309,15 @@ class G1BCPPOEnv(DirectRLEnv):
         q_ref = self.reference_q[ref_idx]
         qd_ref = self.reference_qd[ref_idx]
 
+        # rewards for lower gait and gait terms
+        lower_q = q[:, self.lower_body_joint_ids]
+        lower_q_ref = q_ref[:, self.lower_body_joint_ids]
+
+        lower_body_error = torch.mean((lower_q - lower_q_ref) ** 2, dim=-1)
+        lower_body_gait_reward = torch.exp(-8.0 * lower_body_error)
+
+        lower_body_gait_term = self.cfg.rew_lower_body_gait * lower_body_gait_reward
+
         pose_error = torch.mean(torch.abs(q - q_ref), dim=-1)
         pose_reward = torch.exp(-4.0 * torch.mean((q - q_ref) ** 2, dim=-1))
 
@@ -316,10 +351,9 @@ class G1BCPPOEnv(DirectRLEnv):
         forward_progress_reward = torch.clamp( forward_vel / self.cfg.target_forward_vel, 0.0, 1.0,)
 
         forward_vel_error = (forward_vel - self.cfg.target_forward_vel) ** 2
-        forward_vel_tracking_reward = torch.exp(-100.0 * forward_vel_error)
+        forward_progress_reward = torch.clamp(forward_vel / self.cfg.target_forward_vel, 0.0, 1.0)
 
-        # progress matters most early, tracking above smooths it going overboard
-        forward_vel_reward = 0.7 * forward_progress_reward + 0.3 * forward_vel_tracking_reward
+        forward_vel_reward = forward_progress_reward
 
         #Key balance gate metric introduced to help forward term reward with moving forward while standing upright
         balance_gate = upright_reward * standing_height_reward
@@ -387,6 +421,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + upright_term
             + height_term
             + standing_height_term
+            + lower_body_gait_term
             + forward_vel_term
             + action_rate_term
             + joint_vel_term
@@ -408,6 +443,8 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["upright"] += upright_term
         self._episode_sums["height"] += height_term
         self._episode_sums["standing_height"] += standing_height_term
+        self._episode_sums["lower_body_gait"] = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._episode_sums["lower_body_gait"] += lower_body_gait_term
         self._episode_sums["alive"] += alive_term
         self._episode_sums["action_rate_penalty"] += action_rate_term
         self._episode_sums["joint_vel_penalty"] += joint_vel_term
