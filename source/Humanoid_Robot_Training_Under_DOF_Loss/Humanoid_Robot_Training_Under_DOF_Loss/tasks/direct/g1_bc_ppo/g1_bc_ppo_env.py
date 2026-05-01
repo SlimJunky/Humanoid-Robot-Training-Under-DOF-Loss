@@ -217,6 +217,9 @@ class G1BCPPOEnv(DirectRLEnv):
             "mean_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "knee_collapse_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "max_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_knee_angle": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "knee_asymmetry": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "standing_height": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "forward_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "forward_vel_reward": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
@@ -380,6 +383,7 @@ class G1BCPPOEnv(DirectRLEnv):
         # Penalise excessive knee flexing. Positive knee values correspond to bent knees
         knee_angles = q[:, [self.left_knee_idx, self.right_knee_idx]]
         mean_knee_angle = torch.mean(knee_angles, dim=-1)
+        knee_asymmetry = torch.abs(knee_angles[:, 0] - knee_angles[:, 1])
 
         # Only penalise crouching beyond a moderate knee bend. This got bumped up as my robot learnt to survive taller and this was too low
         knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.60) ** 2, dim=-1)
@@ -401,7 +405,6 @@ class G1BCPPOEnv(DirectRLEnv):
         height_term = self.cfg.rew_height * height_reward
         standing_height_term = self.cfg.rew_standing_height * standing_height_reward
         alive_term = self.cfg.rew_alive * torch.ones_like(root_z)
-
         action_rate_term = -self.cfg.penalty_action_rate * action_rate_penalty
         joint_vel_term = -self.cfg.penalty_joint_vel * joint_vel_penalty
         fall_term = -self.cfg.penalty_fall * fallen.float()
@@ -468,6 +471,9 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["forward_vel_reward"] += forward_vel_term
         self._episode_sums["backward_penalty"] += backward_term
         self._episode_sums["yaw_rate_penalty"] += yaw_rate_term
+        self._episode_sums["left_knee_angle"] += knee_angles[:, 0]
+        self._episode_sums["right_knee_angle"] += knee_angles[:, 1]
+        self._episode_sums["knee_asymmetry"] += knee_asymmetry
 
         self.prev_actions = self.actions.clone()
 
@@ -534,7 +540,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
 
         # Start all envs from reference frame 0 first. Later, randomize this for robustness when learning.
-        # Changed this to prevent overfitting first step, randomizing gate phase sequence slightly.
+        # Changed this to prevent overfitting first step, randomizing gait phase sequence slightly.
         phase0 = torch.rand(num_reset, device=self.device) * 0.10
         ref_idx0 = torch.remainder((phase0 * self.num_ref_frames).long(), self.num_ref_frames)
 
