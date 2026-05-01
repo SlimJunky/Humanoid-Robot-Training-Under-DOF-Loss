@@ -107,8 +107,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_knee_asymmetry: float = 0.03
 
     #Walking velocity rewards and penalty
-    target_forward_vel: float = 0.00 # m/s movement forward essentially
-    rew_forward_vel: float = 0.08
+    target_forward_vel: float = 0.03 # m/s movement forward essentially
+    rew_forward_vel: float = 0.04
     penalty_backward_vel: float = 2.0
     penalty_yaw_rate: float = 0.20
 
@@ -420,7 +420,7 @@ class G1BCPPOEnv(DirectRLEnv):
         height_gate = torch.clamp((root_z - 0.64) / (0.68 - 0.64), 0.0, 1.0)
 
         # Only reward swing behaviour while reasonably upright/tall and feet are far apart from each-other in walking trail
-        swing_gate = upright_reward * standing_height_reward * base_stability_gate * height_gate
+        swing_gate = upright_reward * standing_height_reward * base_stability_gate * height_gate * trailing_gap_gate
 
         trailing_foot_recovery_term = (self.cfg.rew_trailing_foot_recovery* trailing_foot_recovery_reward * swing_gate)
 
