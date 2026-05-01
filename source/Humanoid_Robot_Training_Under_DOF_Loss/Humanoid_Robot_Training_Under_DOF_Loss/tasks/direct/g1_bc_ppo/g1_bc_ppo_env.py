@@ -67,7 +67,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.10
+    residual_scale: float = 0.14
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
@@ -76,7 +76,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_vel: float = 0.03
     rew_bc: float = 0.20 # How much rewards being similar to BC prior
 
-    # Higher values here prioritize staying upright and not falling
+    # Higher values here prioritize staying upright and not falling. Typical for walking policy big penalty fall and big upright reward
     rew_upright: float = 5.0
     rew_height: float = 3.0
     rew_alive: float = 1.0
@@ -88,8 +88,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Lateral balance stability terms higher values reward more staying central
     penalty_lateral_vel: float = 1.0
-    penalty_base_ang_vel: float = 0.40
-    penalty_side_tilt: float = 2.0
+    penalty_base_ang_vel: float = 0.3
+    penalty_side_tilt: float = 2.2
 
     #posture refinement rewards and penalty
     min_good_root_height: float = 0.67
@@ -101,27 +101,27 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     #Stop total knee collapse when attempting walking gait
     knee_collapse_threshold: float = 0.90
-    penalty_knee_collapse: float = 3.0
+    penalty_knee_collapse: float = 2.0
 
-    # Penalise one knee bending much more than the other during unstable stepping.
-    penalty_knee_asymmetry: float = 0.03
+    # Penalise one knee bending much more than the other during unstable stepping or knees far apart
+    penalty_knee_asymmetry: float = 0.00
 
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.03 # m/s movement forward essentially
-    rew_forward_vel: float = 0.04
+    rew_forward_vel: float = 0.08
     penalty_backward_vel: float = 2.0
-    penalty_yaw_rate: float = 0.20
+    penalty_yaw_rate: float = 0.15
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
-    rew_lower_body_gait: float = 0.03
+    rew_lower_body_gait: float = 0.08
 
     # Swing / trailing-foot recovery terms for stable gait
     rew_trailing_foot_recovery: float = 0.08
     rew_swing_foot_clearance: float = 0.04
     swing_clearance_target: float = 0.035
     target_swing_foot_forward_vel: float = 0.10
-    penalty_foot_x_gap: float = 1.0
-    max_foot_x_gap: float = 0.22
+    penalty_foot_x_gap: float = 0.5
+    max_foot_x_gap: float = 0.30
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -417,10 +417,10 @@ class G1BCPPOEnv(DirectRLEnv):
         swing_foot_clearance_reward = torch.exp(-300.0 * (trailing_foot_lift - self.cfg.swing_clearance_target) ** 2)
 
         base_stability_gate = torch.exp(-2.0 * torch.sum(root_ang_vel_b**2, dim=-1))
-        height_gate = torch.clamp((root_z - 0.64) / (0.68 - 0.64), 0.0, 1.0)
+        height_gate = torch.clamp((root_z - 0.60) / (0.67 - 0.60), 0.0, 1.0) # Robot when moving has bent knees and showed root height between 0.63-0.66 usually
 
         # Only reward swing behaviour while reasonably upright/tall and feet are far apart from each-other in walking trail
-        swing_gate = upright_reward * standing_height_reward * base_stability_gate * height_gate * trailing_gap_gate
+        swing_gate = upright_reward * base_stability_gate * height_gate * trailing_gap_gate
 
         trailing_foot_recovery_term = (self.cfg.rew_trailing_foot_recovery* trailing_foot_recovery_reward * swing_gate)
 
