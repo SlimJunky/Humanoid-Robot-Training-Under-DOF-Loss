@@ -71,7 +71,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.16
+    residual_scale: float = 0.0
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
@@ -351,8 +351,10 @@ class G1BCPPOEnv(DirectRLEnv):
 
         self.q_bc = 0.5 * (bc_action_norm + 1.0) * (self.action_high - self.action_low) + self.action_low
 
-        residual = self.cfg.residual_scale * self.actions
-        self.q_target = torch.clip(self.q_bc + residual, self.action_low, self.action_high)
+        #Comment back in when running normal but comment out when checking BC prior by itself 0 residual.
+        #residual = self.cfg.residual_scale * self.actions
+        #self.q_target = torch.clip(self.q_bc + residual, self.action_low, self.action_high)
+        self.q_target = torch.clip(self.q_bc, self.action_low, self.action_high)
 
     def _apply_action(self) -> None:
         self.robot.set_joint_position_target(self.q_target)
