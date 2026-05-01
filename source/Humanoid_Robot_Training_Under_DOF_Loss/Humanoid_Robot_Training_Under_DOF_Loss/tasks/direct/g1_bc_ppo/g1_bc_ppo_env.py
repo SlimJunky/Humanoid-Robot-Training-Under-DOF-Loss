@@ -67,14 +67,14 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.12
+    residual_scale: float = 0.16
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
 
     rew_pose: float = 0.45
     rew_vel: float = 0.03
-    rew_bc: float = 0.20 # How much rewards being similar to BC prior
+    rew_bc: float = 0.25 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling. Typical for walking policy big penalty fall and big upright reward
     rew_upright: float = 5.0
@@ -108,20 +108,21 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.03 # m/s movement forward essentially
-    rew_forward_vel: float = 0.00
+    rew_forward_vel: float = 0.08
     penalty_backward_vel: float = 2.0
     penalty_yaw_rate: float = 0.15
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
-    rew_lower_body_gait: float = 0.08
+    rew_lower_body_gait: float = 0.12
 
     # Swing / trailing-foot recovery terms for stable gait
-    rew_trailing_foot_recovery: float = 0.14
-    rew_swing_foot_clearance: float = 0.10
-    swing_clearance_target: float = 0.020
-    target_swing_foot_forward_vel: float = 0.08
-    penalty_foot_x_gap: float = 0.25
-    max_foot_x_gap: float = 0.35
+    rew_trailing_foot_recovery: float = 0.25
+    rew_swing_foot_clearance: float = 0.35
+    swing_clearance_target: float = 0.015
+    target_swing_foot_forward_vel: float = 0.05
+    penalty_foot_x_gap: float = 0.60
+    max_foot_x_gap: float = 0.40
+
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -413,19 +414,21 @@ class G1BCPPOEnv(DirectRLEnv):
         # Reward the trailing foot moving forward relative to the base.
         trailing_foot_recovery_reward = torch.clamp(trailing_foot_fwd_vel / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
 
-        # Reward a trailing_foot lift to mimic gait walking
+        # Reward a trailing_foot lift to mimic gait walking, clearance gate rewards foot lift first then recovery
         swing_foot_clearance_reward = torch.clamp(trailing_foot_lift / self.cfg.swing_clearance_target, 0.0, 1.0,)
-        clearance_gate = 0.25 + 0.75 * trailing_foot_recovery_reward
+        #clearance_gate = 0.75 + 0.25 * trailing_foot_recovery_reward
+        clearance_gate = 1.0
 
         base_stability_gate = torch.exp(-0.5 * torch.sum(root_ang_vel_b**2, dim=-1))
         height_gate = torch.clamp((root_z - 0.60) / (0.67 - 0.60), 0.0, 1.0) # Robot when moving has bent knees and showed root height between 0.63-0.66 usually
 
         # Only reward swing behaviour while reasonably upright/tall and feet are far apart from each-other in walking trail
-        swing_gate = upright_reward * base_stability_gate * height_gate * trailing_gap_gate
+        #swing_gate = upright_reward * base_stability_gate * height_gate * trailing_gap_gate
+        swing_gate = upright_reward * height_gate * trailing_gap_gate
 
         trailing_foot_recovery_term = (self.cfg.rew_trailing_foot_recovery* trailing_foot_recovery_reward * swing_gate)
 
-        swing_foot_clearance_term = (self.cfg.rew_swing_foot_clearance * swing_foot_clearance_reward * clearance_gate * swing_gate)
+        swing_foot_clearance_term = (self.cfg.rew_swing_foot_clearance * swing_foot_clearance_reward * swing_gate)
 
         #-----------------------END EXPERIMENT TRAILING FOOT RECOVERY -----------------------------------------
 
