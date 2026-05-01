@@ -16,6 +16,8 @@ from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils import configclass
 from isaaclab.utils.math import quat_apply_inverse
 
+from isaaclab.sensors import ContactSensor, ContactSensorCfg
+
 #Using the G1_MINIMAL for training
 from isaaclab_assets import G1_MINIMAL_CFG
 
@@ -47,11 +49,13 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
         num_envs=512,
         env_spacing=3.0,
         replicate_physics=True,
-        clone_in_fabric=True,
+        clone_in_fabric=False,
     )
 
     # robot
     robot_cfg: ArticulationCfg = G1_MINIMAL_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    # Required for ContactSensor to work on G1 links
+    robot_cfg.spawn.activate_contact_sensors = True
 
     # files, change these to match external project location of the base path
     bc_policy_path: str = (
@@ -74,7 +78,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     rew_pose: float = 0.45
     rew_vel: float = 0.03
-    rew_bc: float = 0.25 # How much rewards being similar to BC prior
+    rew_bc: float = 0.20 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling. Typical for walking policy big penalty fall and big upright reward
     rew_upright: float = 5.0
@@ -123,6 +127,31 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_foot_x_gap: float = 0.60
     max_foot_x_gap: float = 0.40
 
+    '''------------Added contact airtime support rewards--------------------'''
+    left_foot_contact_cfg: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/left_ankle_roll_link",
+        update_period=0.0,
+        history_length=3,
+        debug_vis=False,
+    )
+
+    right_foot_contact_cfg: ContactSensorCfg = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/right_ankle_roll_link",
+        update_period=0.0,
+        history_length=3,
+        debug_vis=False,
+    )
+
+    # Tuntable contact, airtime and weight distribution terms
+    contact_force_threshold: float = 20.0
+    rew_weight_shift: float = 0.20
+    rew_single_support: float = 0.20
+    rew_foot_airtime: float = 0.20
+    penalty_foot_slip: float = 0.30
+
+    min_air_time: float = 0.06
+    target_air_time: float = 0.18
+    max_contact_foot_speed: float = 0.05
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -130,6 +159,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
     '''Loads BC metadata, action bounds, mapped walking .npz, loads torchscript BC policy and allocate runtime tensors'''
     def __init__(self, cfg: G1BCPPOEnvCfg, render_mode: str | None = None, **kwargs):
+        cfg.robot_cfg.spawn.activate_contact_sensors = True
         super().__init__(cfg, render_mode, **kwargs)
 
         # Load metadata
@@ -180,6 +210,12 @@ class G1BCPPOEnv(DirectRLEnv):
 
         self.q_bc = torch.zeros_like(self.actions)
         self.q_target = torch.zeros_like(self.actions)
+
+        self.left_air_time = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self.right_air_time = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+
+        self.prev_left_contact = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
+        self.prev_right_contact = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
 
         self.lower_body_joint_names = [
             "left_hip_pitch_joint",
@@ -260,6 +296,20 @@ class G1BCPPOEnv(DirectRLEnv):
             "trailing_foot_fwd_vel": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "foot_x_gap": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "foot_x_gap_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_contact": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_contact": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_force_z": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_force_z": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "weight_shift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "single_support": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "foot_airtime": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "foot_slip_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_air_time": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_air_time": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "raw_single_support": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "raw_foot_airtime": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "raw_weight_shift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "raw_foot_slip": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
     #Simulation bare bones isaaclab flat environment
@@ -268,12 +318,18 @@ class G1BCPPOEnv(DirectRLEnv):
 
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg())
 
-        self.scene.clone_environments(copy_from_source=False)
+        self.scene.clone_environments(copy_from_source=True)
 
         if self.device == "cpu":
             self.scene.filter_collisions(global_prim_paths=[])
 
         self.scene.articulations["robot"] = self.robot
+
+        self.left_foot_contact_sensor = ContactSensor(self.cfg.left_foot_contact_cfg)
+        self.right_foot_contact_sensor = ContactSensor(self.cfg.right_foot_contact_cfg)
+
+        self.scene.sensors["left_foot_contact"] = self.left_foot_contact_sensor
+        self.scene.sensors["right_foot_contact"] = self.right_foot_contact_sensor    
 
         light_cfg = sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -425,13 +481,104 @@ class G1BCPPOEnv(DirectRLEnv):
         # Only reward swing behaviour while reasonably upright/tall and feet are far apart from each-other in walking trail
         #swing_gate = upright_reward * base_stability_gate * height_gate * trailing_gap_gate
         swing_gate = upright_reward * height_gate * trailing_gap_gate
-
         trailing_foot_recovery_term = (self.cfg.rew_trailing_foot_recovery* trailing_foot_recovery_reward * swing_gate)
-
         swing_foot_clearance_term = (self.cfg.rew_swing_foot_clearance * swing_foot_clearance_reward * swing_gate)
 
-        #-----------------------END EXPERIMENT TRAILING FOOT RECOVERY -----------------------------------------
+        #-----------------------END EXPERIMENT TRAILING FOOT RECOVERY ----------------------------------------------
 
+
+
+        # ----------------------------------------------------------------------------------------------------------
+        # Contact-aware stepping rewards:
+        # 1. support-foot load / weight shift
+        # 2. single-support swing behaviour
+        # 3. foot airtime touchdown reward
+        # 4. stance-foot slip penalty
+        # ----------------------------------------------------------------------------------------------------------
+
+        left_force_w = self.left_foot_contact_sensor.data.net_forces_w[:, 0, :]
+        right_force_w = self.right_foot_contact_sensor.data.net_forces_w[:, 0, :]
+
+        left_force_z = torch.clamp(left_force_w[:, 2], min=0.0)
+        right_force_z = torch.clamp(right_force_w[:, 2], min=0.0)
+
+        left_contact = (left_force_z > self.cfg.contact_force_threshold).float()
+        right_contact = (right_force_z > self.cfg.contact_force_threshold).float()
+
+        # If left foot is trailing, right foot should be support.
+        # If right foot is trailing, left foot should be support.
+        support_force_z = torch.where(left_is_trailing, right_force_z, left_force_z)
+        swing_force_z = torch.where(left_is_trailing, left_force_z, right_force_z)
+
+        support_contact = torch.where(left_is_trailing, right_contact, left_contact)
+        swing_contact = torch.where(left_is_trailing, left_contact, right_contact)
+
+        # Reward unloading the swing/trailing foot and loading the support foot.
+        weight_shift_reward = torch.clamp(
+            (support_force_z - swing_force_z) / (support_force_z + swing_force_z + 1e-6),
+            0.0,
+            1.0,
+        )
+
+        weight_shift_term = (self.cfg.rew_weight_shift * weight_shift_reward * upright_reward * height_gate * trailing_gap_gate)
+
+        # Reward true single support: support foot in contact, swing/trailing foot off contact.
+        single_support_reward = support_contact * (1.0 - swing_contact)
+        single_support_term = (self.cfg.rew_single_support * single_support_reward * swing_foot_clearance_reward * upright_reward * height_gate)
+
+        # Airtime timers for both feet.
+        dt = self.step_dt
+
+        left_new_air_time = self.left_air_time + (1.0 - left_contact) * dt
+        right_new_air_time = self.right_air_time + (1.0 - right_contact) * dt
+
+        left_touchdown = (left_contact > 0.5) & (self.prev_left_contact < 0.5)
+        right_touchdown = (right_contact > 0.5) & (self.prev_right_contact < 0.5)
+
+        left_airtime_bonus = torch.where(
+            left_touchdown,
+            torch.clamp(
+                (self.left_air_time - self.cfg.min_air_time)
+                / (self.cfg.target_air_time - self.cfg.min_air_time),
+                0.0,
+                1.0,
+            ),
+            torch.zeros_like(root_z),
+        )
+
+        right_airtime_bonus = torch.where(
+            right_touchdown,
+            torch.clamp(
+                (self.right_air_time - self.cfg.min_air_time)
+                / (self.cfg.target_air_time - self.cfg.min_air_time),
+                0.0,
+                1.0,
+            ),
+            torch.zeros_like(root_z),
+        )
+
+        foot_airtime_reward = left_airtime_bonus + right_airtime_bonus
+
+        foot_airtime_term = (self.cfg.rew_foot_airtime * foot_airtime_reward * upright_reward * height_gate)
+
+        # Reset airtime on contact, keep accumulating while airborne.
+        self.left_air_time = torch.where(left_contact > 0.5, torch.zeros_like(root_z), left_new_air_time)
+        self.right_air_time = torch.where(right_contact > 0.5, torch.zeros_like(root_z), right_new_air_time)
+
+        self.prev_left_contact = left_contact.clone()
+        self.prev_right_contact = right_contact.clone()
+
+        # Penalise sliding/dragging while the foot is in contact.
+        left_foot_speed_xy = torch.norm(left_foot_vel_b[:, :2], dim=-1)
+        right_foot_speed_xy = torch.norm(right_foot_vel_b[:, :2], dim=-1)
+
+        left_slip_penalty = left_contact * torch.relu(left_foot_speed_xy - self.cfg.max_contact_foot_speed) ** 2
+        right_slip_penalty = right_contact * torch.relu(right_foot_speed_xy - self.cfg.max_contact_foot_speed) ** 2
+
+        foot_slip_penalty = left_slip_penalty + right_slip_penalty
+        foot_slip_term = -self.cfg.penalty_foot_slip * foot_slip_penalty
+
+        #-----------------------------Finished contact-aware-------------------------------------------
 
         action_rate_penalty = torch.mean((self.actions - self.prev_actions) ** 2, dim=-1)
         joint_vel_penalty = torch.mean(qd**2, dim=-1)
@@ -478,7 +625,6 @@ class G1BCPPOEnv(DirectRLEnv):
         # Only penalise crouching beyond a moderate knee bend. This got bumped up as my robot learnt to survive taller and this was too low
         knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.60) ** 2, dim=-1)
        
-
         # Only punish severe knee collapse, not normal walking knee bend.
         knee_collapse_penalty = torch.mean(torch.relu(knee_angles - self.cfg.knee_collapse_threshold) ** 2, dim=-1,)
 
@@ -518,6 +664,10 @@ class G1BCPPOEnv(DirectRLEnv):
             + trailing_foot_recovery_term
             + swing_foot_clearance_term
             + foot_x_gap_term
+            + weight_shift_term
+            + single_support_term
+            + foot_airtime_term
+            + foot_slip_term
             + action_rate_term
             + joint_vel_term
             + lateral_vel_term
@@ -574,6 +724,20 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["trailing_foot_fwd_vel"] += trailing_foot_fwd_vel
         self._episode_sums["foot_x_gap"] += foot_x_gap
         self._episode_sums["foot_x_gap_penalty"] += foot_x_gap_term
+        self._episode_sums["left_contact"] += left_contact
+        self._episode_sums["right_contact"] += right_contact
+        self._episode_sums["left_force_z"] += left_force_z
+        self._episode_sums["right_force_z"] += right_force_z
+        self._episode_sums["weight_shift"] += weight_shift_term
+        self._episode_sums["single_support"] += single_support_term
+        self._episode_sums["foot_airtime"] += foot_airtime_term
+        self._episode_sums["foot_slip_penalty"] += foot_slip_term
+        self._episode_sums["left_air_time"] += self.left_air_time
+        self._episode_sums["right_air_time"] += self.right_air_time
+        self._episode_sums["raw_single_support"] += single_support_reward
+        self._episode_sums["raw_foot_airtime"] += foot_airtime_reward
+        self._episode_sums["raw_weight_shift"] += weight_shift_reward
+        self._episode_sums["raw_foot_slip"] += foot_slip_penalty
 
         self.prev_actions = self.actions.clone()
 
@@ -660,3 +824,9 @@ class G1BCPPOEnv(DirectRLEnv):
         self.prev_actions[env_ids_t] = 0.0
         self.q_bc[env_ids_t] = joint_pos
         self.q_target[env_ids_t] = joint_pos
+
+        #Reset air and contact time at the end
+        self.left_air_time[env_ids_t] = 0.0
+        self.right_air_time[env_ids_t] = 0.0
+        self.prev_left_contact[env_ids_t] = 1.0
+        self.prev_right_contact[env_ids_t] = 1.0
