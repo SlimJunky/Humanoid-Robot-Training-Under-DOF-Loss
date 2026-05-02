@@ -71,19 +71,24 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.0
+    residual_scale: float = 0.12
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
 
-    rew_pose: float = 0.45
-    rew_vel: float = 0.03
-    rew_bc: float = 0.20 # How much rewards being similar to BC prior
+    rew_pose: float = 0.35
+    rew_vel: float = 0.02
+    rew_bc: float = 0.08 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling. Typical for walking policy big penalty fall and big upright reward
     rew_upright: float = 5.0
     rew_height: float = 3.0
     rew_alive: float = 1.0
+    rew_standing_height: float = 0.8
+
+    penalty_low_height: float = 8.0
+    penalty_knee_crouch: float = 0.06
+    penalty_knee_collapse: float = 2.0
 
     # PENALTY RATES falling and moving joints out of predicted action
     penalty_action_rate: float = 0.02
@@ -91,21 +96,16 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_fall: float = 15.0
 
     # Lateral balance stability terms higher values reward more staying central
-    penalty_lateral_vel: float = 0.6
-    penalty_base_ang_vel: float = 0.3
-    penalty_side_tilt: float = 2.0
+    penalty_lateral_vel: float = 0.8
+    penalty_base_ang_vel: float = 0.35
+    penalty_side_tilt: float = 2.5
+    penalty_backward_vel: float = 2.0
+    penalty_yaw_rate: float = 0.15
 
-    #posture refinement rewards and penalty
-    min_good_root_height: float = 0.67
-    penalty_low_height: float = 12.0
-    penalty_knee_crouch: float = 0.10
-    rew_standing_height: float = 1.0
+    min_good_root_height: float = 0.64
     standing_height_start: float = 0.60
     standing_height_full: float = 0.68
-
-    #Stop total knee collapse when attempting walking gait
     knee_collapse_threshold: float = 0.90
-    penalty_knee_collapse: float = 2.0
 
     # Penalise one knee bending much more than the other during unstable stepping or knees far apart
     penalty_knee_asymmetry: float = 0.00
@@ -113,19 +113,17 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.03 # m/s movement forward essentially
     rew_forward_vel: float = 0.08
-    penalty_backward_vel: float = 2.0
-    penalty_yaw_rate: float = 0.15
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
-    rew_lower_body_gait: float = 0.12
+    rew_lower_body_gait: float = 0.10
 
     # Swing / trailing-foot recovery terms for stable gait
-    rew_trailing_foot_recovery: float = 0.25
-    rew_swing_foot_clearance: float = 0.35
-    swing_clearance_target: float = 0.015
+    rew_trailing_foot_recovery: float = 0.40
+    rew_swing_foot_clearance: float = 0.50
+    swing_clearance_target: float = 0.025
     target_swing_foot_forward_vel: float = 0.05
-    penalty_foot_x_gap: float = 0.60
-    max_foot_x_gap: float = 0.40
+    penalty_foot_x_gap: float = 0.40
+    max_foot_x_gap: float = 0.45
 
     '''------------Added contact airtime support rewards--------------------'''
     left_foot_contact_cfg: ContactSensorCfg = ContactSensorCfg(
@@ -144,14 +142,14 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Tuntable contact, airtime and weight distribution terms
     contact_force_threshold: float = 20.0
-    rew_weight_shift: float = 0.20
-    rew_single_support: float = 0.20
-    rew_foot_airtime: float = 0.20
-    penalty_foot_slip: float = 0.30
+    rew_weight_shift: float = 0.40
+    rew_single_support: float = 0.45
+    rew_foot_airtime: float = 0.45
+    penalty_foot_slip: float = 0.15
 
     min_air_time: float = 0.06
-    target_air_time: float = 0.18
-    max_contact_foot_speed: float = 0.05
+    target_air_time: float = 0.20
+    max_contact_foot_speed: float = 0.08
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -352,9 +350,10 @@ class G1BCPPOEnv(DirectRLEnv):
         self.q_bc = 0.5 * (bc_action_norm + 1.0) * (self.action_high - self.action_low) + self.action_low
 
         #Comment back in when running normal but comment out when checking BC prior by itself 0 residual.
-        #residual = self.cfg.residual_scale * self.actions
-        #self.q_target = torch.clip(self.q_bc + residual, self.action_low, self.action_high)
-        self.q_target = torch.clip(self.q_bc, self.action_low, self.action_high)
+        #self.q_target = torch.clip(self.q_bc, self.action_low, self.action_high)
+        residual = self.cfg.residual_scale * self.actions
+        self.q_target = torch.clip(self.q_bc + residual, self.action_low, self.action_high)
+        
 
     def _apply_action(self) -> None:
         self.robot.set_joint_position_target(self.q_target)

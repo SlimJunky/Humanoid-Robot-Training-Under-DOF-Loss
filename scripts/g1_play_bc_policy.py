@@ -33,6 +33,10 @@ parser.add_argument("--debug-every", type=int, default=120, help="Print debug in
 parser.add_argument("--control-decimation", type=int, default=2, help="Run policy every N physics steps. 2 means 120 Hz sim / 2 = 60 Hz policy control.")
 # So I can compare walking policy to direct reference motion initially quickly
 parser.add_argument("--use-reference-actions", action="store_true", help="Ignore BC policy and directly play mapped reference joint targets from source_mapped_npz.")
+parser.add_argument("--freeze-root", action="store_true", help="Hold the pelvis/root fixed in space so the legs can be inspected without falling.")
+parser.add_argument("--freeze-root-height", type=float, default=None, help="Root height used when --freeze-root is enabled. Defaults to --root-height.")
+
+
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -61,6 +65,20 @@ def reset_robot(robot: Articulation, default_joint_pos_np: np.ndarray, root_x: f
     robot.write_root_velocity_to_sim(root_state[:, 7:])
     robot.write_joint_state_to_sim(joint_pos, joint_vel)
     robot.reset()
+
+''' Keep the floating base fixed so only the joint motion is visually inspected. Do this for visual inspect of BC policy'''
+def freeze_robot_root(robot: Articulation, root_x: float, root_y: float, root_z: float) -> None:
+    root_state = robot.data.default_root_state.clone()
+
+    root_state[:, 0] = root_x
+    root_state[:, 1] = root_y
+    root_state[:, 2] = root_z
+
+    # Keep default orientation and zero root velocity.
+    root_state[:, 7:] = 0.0
+
+    robot.write_root_pose_to_sim(root_state[:, :7])
+    robot.write_root_velocity_to_sim(root_state[:, 7:])    
 
 
 def build_proprio(q: np.ndarray, qd: np.ndarray, phase: float, include_phase: bool) -> np.ndarray:
@@ -260,6 +278,54 @@ def main():
         "torso_joint",
     ]
 
+    lower_body_joint_names = [
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_hip_yaw_joint",
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint",
+        "right_hip_yaw_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
+    ]
+
+    lower_body_joint_ids = np.array( [joint_names_file.index(name) for name in lower_body_joint_names if name in joint_names_file], dtype=np.int64,)
+
+    left_foot_ids, left_foot_names = robot.find_bodies(".*left_ankle_roll.*")
+    right_foot_ids, right_foot_names = robot.find_bodies(".*right_ankle_roll.*")
+
+    if len(left_foot_ids) == 0 or len(right_foot_ids) == 0:
+        raise RuntimeError("Could not find left/right ankle roll bodies for debug.")
+
+    left_foot_body_id = left_foot_ids[0]
+    right_foot_body_id = right_foot_ids[0]
+
+    print(f"[INFO] Debug left foot body : {left_foot_names[0]} id={left_foot_body_id}")
+    print(f"[INFO] Debug right foot body: {right_foot_names[0]} id={right_foot_body_id}")
+
+    cycle_idx = 0
+    prev_phase = phase
+
+    cycle_stats = {
+        "bc_ref_mean": [],
+        "bc_ref_max": [],
+        "q_ref_mean": [],
+        "lower_bc_ref_mean": [],
+        "lower_q_ref_mean": [],
+        "target_jump_mean": [],
+        "policy_sat_frac": [],
+        "left_foot_x": [],
+        "right_foot_x": [],
+        "left_foot_z": [],
+        "right_foot_z": [],
+        "foot_x_gap": [],
+        "foot_z_diff": [],
+    }
+
 
     while simulation_app.is_running():
         # read current state live oservations from simulation physics
@@ -287,7 +353,7 @@ def main():
 
         # build policy observation. recreate observation format the policy expects
         # builds batch dimension that passes observation in robomimic policy
-        #policy output is assumed as normalized 37-dim action vector.
+        # policy output is assumed as normalized 37-dim action vector.
 
         # Decimated policy inference.
         ''' step 0: run policy, compute new target
@@ -374,6 +440,39 @@ def main():
             ref_error = float(np.mean(np.abs(q_target - ref_next_q)))
             ref_max_error = float(np.max(np.abs(q_target - ref_next_q)))
 
+            ref_current_q = reference_joint_targets[ref_idx]
+
+            q_ref_error = float(np.mean(np.abs(q - ref_current_q)))
+            lower_bc_ref_error = float(np.mean(np.abs(q_target[lower_body_joint_ids] - ref_next_q[lower_body_joint_ids])))
+            lower_q_ref_error = float(np.mean(np.abs(q[lower_body_joint_ids] - ref_current_q[lower_body_joint_ids])))
+
+            policy_sat_frac = float(np.mean(np.abs(policy_out) > 0.98))
+
+            left_foot_pos = robot.data.body_pos_w[0, left_foot_body_id].detach().cpu().numpy()
+            right_foot_pos = robot.data.body_pos_w[0, right_foot_body_id].detach().cpu().numpy()
+            root_pos_dbg = robot.data.root_pos_w[0].detach().cpu().numpy()
+
+            left_foot_rel = left_foot_pos - root_pos_dbg
+            right_foot_rel = right_foot_pos - root_pos_dbg
+
+            foot_x_gap = float(abs(left_foot_rel[0] - right_foot_rel[0]))
+            foot_z_diff = float(abs(left_foot_rel[2] - right_foot_rel[2]))
+
+            #Log for reference of gait cycle compared to mapped .npz motion
+            cycle_stats["bc_ref_mean"].append(ref_error)
+            cycle_stats["bc_ref_max"].append(ref_max_error)
+            cycle_stats["q_ref_mean"].append(q_ref_error)
+            cycle_stats["lower_bc_ref_mean"].append(lower_bc_ref_error)
+            cycle_stats["lower_q_ref_mean"].append(lower_q_ref_error)
+            cycle_stats["target_jump_mean"].append(target_jump)
+            cycle_stats["policy_sat_frac"].append(policy_sat_frac)
+            cycle_stats["left_foot_x"].append(float(left_foot_rel[0]))
+            cycle_stats["right_foot_x"].append(float(right_foot_rel[0]))
+            cycle_stats["left_foot_z"].append(float(left_foot_rel[2]))
+            cycle_stats["right_foot_z"].append(float(right_foot_rel[2]))
+            cycle_stats["foot_x_gap"].append(foot_x_gap)
+            cycle_stats["foot_z_diff"].append(foot_z_diff)
+
             print(
                 f"[DBG] step={step_idx} phase={phase:.3f} root_z={root_z:.3f} "
                 f"update_policy={should_update_policy} "
@@ -391,6 +490,22 @@ def main():
                 f"root_lin_vel=({root_lin_vel[0]:+.3f}, {root_lin_vel[1]:+.3f}, {root_lin_vel[2]:+.3f})"
             )
 
+            print(
+                f"[DBG] tracking: "
+                f"mean|q-ref_current|={q_ref_error:.4f} "
+                f"lower_mean|q_target-ref_next|={lower_bc_ref_error:.4f} "
+                f"lower_mean|q-ref_current|={lower_q_ref_error:.4f} "
+                f"policy_sat_frac={policy_sat_frac:.3f}"
+            )
+
+            print(
+                f"[DBG] feet_rel_to_root: "
+                f"L(x={left_foot_rel[0]:+.3f}, y={left_foot_rel[1]:+.3f}, z={left_foot_rel[2]:+.3f}) "
+                f"R(x={right_foot_rel[0]:+.3f}, y={right_foot_rel[1]:+.3f}, z={right_foot_rel[2]:+.3f}) "
+                f"foot_x_gap={foot_x_gap:.3f} "
+                f"foot_z_diff={foot_z_diff:.3f}"
+            )
+
             print_joint_sample("current q", q, joint_names_file, sample_joint_names)
             print_joint_sample("current qd", qd, joint_names_file, sample_joint_names)
             print_joint_sample("policy q_target", q_target, joint_names_file, sample_joint_names)
@@ -401,16 +516,69 @@ def main():
 
 
         #Apply targets and step sim
+
+        if args_cli.freeze_root:
+            freeze_z = args_cli.freeze_root_height if args_cli.freeze_root_height is not None else args_cli.root_height
+            freeze_robot_root(robot, args_cli.root_x, args_cli.root_y, freeze_z)
+
         robot.set_joint_position_target(q_target_torch)
         robot.write_data_to_sim()
 
         sim.step()
+
+        if args_cli.freeze_root:
+            freeze_z = args_cli.freeze_root_height if args_cli.freeze_root_height is not None else args_cli.root_height
+            freeze_robot_root(robot, args_cli.root_x, args_cli.root_y, freeze_z)
         robot.update(sim_dt)
 
         #Updates phase
         if should_update_policy:
             phase = (phase + (sim_dt * control_decimation) / args_cli.gait_period_s) % 1.0
 
+
+        '''Summary cycle block'''
+        if phase < prev_phase and len(cycle_stats["bc_ref_mean"]) > 0:
+            print("\n================ BC / REFERENCE CYCLE SUMMARY ================")
+            print(f"[CYCLE {cycle_idx}] frozen_root={args_cli.freeze_root} use_reference_actions={args_cli.use_reference_actions}")
+            print(
+                f"[CYCLE {cycle_idx}] bc_to_ref: "
+                f"mean={np.mean(cycle_stats['bc_ref_mean']):.5f}, "
+                f"max_mean={np.max(cycle_stats['bc_ref_mean']):.5f}, "
+                f"max_abs={np.max(cycle_stats['bc_ref_max']):.5f}"
+            )
+            print(
+                f"[CYCLE {cycle_idx}] sim_tracking: "
+                f"mean|q-ref_current|={np.mean(cycle_stats['q_ref_mean']):.5f}, "
+                f"lower_mean|q-ref_current|={np.mean(cycle_stats['lower_q_ref_mean']):.5f}, "
+                f"lower_mean|q_target-ref_next|={np.mean(cycle_stats['lower_bc_ref_mean']):.5f}"
+            )
+            print(
+                f"[CYCLE {cycle_idx}] policy: "
+                f"mean_target_jump={np.mean(cycle_stats['target_jump_mean']):.5f}, "
+                f"max_target_jump={np.max(cycle_stats['target_jump_mean']):.5f}, "
+                f"mean_policy_sat_frac={np.mean(cycle_stats['policy_sat_frac']):.3f}"
+            )
+            print(
+                f"[CYCLE {cycle_idx}] foot_motion_rel_to_root: "
+                f"Lx_range=({np.min(cycle_stats['left_foot_x']):+.3f}, {np.max(cycle_stats['left_foot_x']):+.3f}), "
+                f"Rx_range=({np.min(cycle_stats['right_foot_x']):+.3f}, {np.max(cycle_stats['right_foot_x']):+.3f}), "
+                f"Lz_range=({np.min(cycle_stats['left_foot_z']):+.3f}, {np.max(cycle_stats['left_foot_z']):+.3f}), "
+                f"Rz_range=({np.min(cycle_stats['right_foot_z']):+.3f}, {np.max(cycle_stats['right_foot_z']):+.3f})"
+            )
+            print(
+                f"[CYCLE {cycle_idx}] foot_gap: "
+                f"mean_x_gap={np.mean(cycle_stats['foot_x_gap']):.3f}, "
+                f"max_x_gap={np.max(cycle_stats['foot_x_gap']):.3f}, "
+                f"mean_z_diff={np.mean(cycle_stats['foot_z_diff']):.3f}, "
+                f"max_z_diff={np.max(cycle_stats['foot_z_diff']):.3f}"
+            )
+            print("==============================================================\n")
+
+            cycle_idx += 1
+            for key in cycle_stats:
+                cycle_stats[key].clear()
+
+        prev_phase = phase
         step_idx += 1
 
 
