@@ -71,14 +71,14 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.12
+    residual_scale: float = 0.20
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
 
-    rew_pose: float = 0.35
-    rew_vel: float = 0.02
-    rew_bc: float = 0.08 # How much rewards being similar to BC prior
+    rew_pose: float = 0.30
+    rew_vel: float = 0.015
+    rew_bc: float = 0.06 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling. Typical for walking policy big penalty fall and big upright reward
     rew_upright: float = 5.0
@@ -98,7 +98,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # Lateral balance stability terms higher values reward more staying central
     penalty_lateral_vel: float = 0.8
     penalty_base_ang_vel: float = 0.35
-    penalty_side_tilt: float = 2.5
+    penalty_side_tilt: float = 2.0
     penalty_backward_vel: float = 2.0
     penalty_yaw_rate: float = 0.15
 
@@ -142,10 +142,10 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Tuntable contact, airtime and weight distribution terms
     contact_force_threshold: float = 20.0
-    rew_weight_shift: float = 0.40
-    rew_single_support: float = 0.45
-    rew_foot_airtime: float = 0.45
-    penalty_foot_slip: float = 0.15
+    rew_weight_shift: float = 0.45
+    rew_single_support: float = 0.80
+    rew_foot_airtime: float = 0.60
+    penalty_foot_slip: float = 0.35
 
     min_air_time: float = 0.06
     target_air_time: float = 0.20
@@ -308,6 +308,7 @@ class G1BCPPOEnv(DirectRLEnv):
             "raw_foot_airtime": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "raw_weight_shift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "raw_foot_slip": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "swing_unload": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
     #Simulation bare bones isaaclab flat environment
@@ -488,14 +489,7 @@ class G1BCPPOEnv(DirectRLEnv):
         #-----------------------END EXPERIMENT TRAILING FOOT RECOVERY ----------------------------------------------
 
 
-
-        # ----------------------------------------------------------------------------------------------------------
-        # Contact-aware stepping rewards:
-        # 1. support-foot load / weight shift
-        # 2. single-support swing behaviour
-        # 3. foot airtime touchdown reward
-        # 4. stance-foot slip penalty
-        # ----------------------------------------------------------------------------------------------------------
+        #-------------------------CONTACT AWARE BEHAVIOUR TERMS-----------------------------------------------------
 
         left_force_w = self.left_foot_contact_sensor.data.net_forces_w[:, 0, :]
         right_force_w = self.right_foot_contact_sensor.data.net_forces_w[:, 0, :]
@@ -513,6 +507,10 @@ class G1BCPPOEnv(DirectRLEnv):
 
         support_contact = torch.where(left_is_trailing, right_contact, left_contact)
         swing_contact = torch.where(left_is_trailing, left_contact, right_contact)
+        swing_unload_reward = support_contact * (1.0 - swing_contact)
+
+        swing_unload_term = (self.cfg.rew_single_support * swing_unload_reward * upright_reward * height_gate* trailing_gap_gate)
+
 
         # Reward unloading the swing/trailing foot and loading the support foot.
         weight_shift_reward = torch.clamp(
@@ -525,7 +523,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # Reward true single support: support foot in contact, swing/trailing foot off contact.
         single_support_reward = support_contact * (1.0 - swing_contact)
-        single_support_term = (self.cfg.rew_single_support * single_support_reward * swing_foot_clearance_reward * upright_reward * height_gate)
+        single_support_term = (self.cfg.rew_single_support * single_support_reward * (0.25 + 0.75 * swing_foot_clearance_reward) * upright_reward * height_gate)
 
         # Airtime timers for both feet.
         dt = self.step_dt
@@ -664,6 +662,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + forward_vel_term
             + trailing_foot_recovery_term
             + swing_foot_clearance_term
+            + swing_unload_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -739,6 +738,7 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["raw_foot_airtime"] += foot_airtime_reward
         self._episode_sums["raw_weight_shift"] += weight_shift_reward
         self._episode_sums["raw_foot_slip"] += foot_slip_penalty
+        self._episode_sums["swing_unload"] += swing_unload_term
 
         self.prev_actions = self.actions.clone()
 
