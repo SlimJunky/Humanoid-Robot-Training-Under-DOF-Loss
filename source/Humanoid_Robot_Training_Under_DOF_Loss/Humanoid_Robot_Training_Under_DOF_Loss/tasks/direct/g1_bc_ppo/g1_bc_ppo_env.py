@@ -87,8 +87,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_standing_height: float = 0.3
 
     penalty_low_height: float = 10.0
-    penalty_knee_crouch: float = 0.06
-    penalty_knee_collapse: float = 2.0
+    penalty_knee_crouch: float = 0.08
+    penalty_knee_collapse: float = 3.0
 
     # PENALTY RATES falling and moving joints out of predicted action
     penalty_action_rate: float = 0.02
@@ -112,24 +112,24 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.04 # m/s movement forward essentially
-    rew_forward_vel: float = 0.4
+    rew_forward_vel: float = 0.25
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
     rew_lower_body_gait: float = 0.12
 
     # Swing / trailing-foot recovery terms for stable gait
-    rew_trailing_foot_recovery: float = 0.25
-    rew_swing_foot_clearance: float = 0.35
+    rew_trailing_foot_recovery: float = 0.05
+    rew_swing_foot_clearance: float = 0.10
     swing_clearance_target: float = 0.045
     target_swing_foot_forward_vel: float = 0.08
     penalty_foot_x_gap: float = 0.40
     max_foot_x_gap: float = 0.45
 
     # Phase-gated stepping terms terms
-    rew_phase_swing_lift: float = 4.0
-    rew_phase_forward_swing: float = 5.0
-    rew_phase_single_support: float = 3.00
-    penalty_wrong_phase_lift: float = 0.75
+    rew_phase_swing_lift: float = 6.0
+    rew_phase_forward_swing: float = 7.0
+    rew_phase_single_support: float = 4.00
+    penalty_wrong_phase_lift: float = 1.5
     phase_gate_power: float = 0.70
 
     '''------------Added contact airtime support rewards--------------------'''
@@ -582,9 +582,8 @@ class G1BCPPOEnv(DirectRLEnv):
         right_new_air_time = self.right_air_time + (1.0 - right_contact) * dt
 
         swing_air_time = torch.where(left_is_trailing, left_new_air_time, right_new_air_time)
-
         sustained_air_reward = torch.clamp( (swing_air_time - self.cfg.min_air_time) / (self.cfg.target_air_time - self.cfg.min_air_time + 1e-6), 0.0, 1.0,)
-        sustained_swing_air_term = (self.cfg.rew_sustained_swing_air * sustained_air_reward * counted_trailing_lift_reward * support_contact * upright_reward * height_gate * heading_gate)
+        
 
         left_touchdown = (left_contact > 0.5) & (self.prev_left_contact < 0.5)
         right_touchdown = (right_contact > 0.5) & (self.prev_right_contact < 0.5)
@@ -782,6 +781,22 @@ class G1BCPPOEnv(DirectRLEnv):
         * upright_reward
         * height_gate
         )
+
+        phase_swing_air_time = torch.where(phase_left_should_swing, left_new_air_time, right_new_air_time,)
+
+        phase_sustained_air_reward = torch.clamp((phase_swing_air_time - self.cfg.min_air_time) / (self.cfg.target_air_time - self.cfg.min_air_time + 1e-6), 0.0, 1.0,)
+
+        sustained_swing_air_term = (self.cfg.rew_sustained_swing_air
+        * phase_sustained_air_reward
+        * phase_lift_reward
+        * phase_single_support_reward
+        * phase_active_gate
+        * upright_reward
+        * height_gate
+        * heading_gate
+        )
+
+        
 
         #Reward movement following the walking gait and penalize standing still and not attempting to move forward or swing foot
         step_activity_reward = torch.clamp(0.70 * phase_lift_reward * phase_active_gate + 0.30 * phase_single_support_reward * phase_active_gate + 0.20 * forward_progress_reward, 0.0, 1.0,)
