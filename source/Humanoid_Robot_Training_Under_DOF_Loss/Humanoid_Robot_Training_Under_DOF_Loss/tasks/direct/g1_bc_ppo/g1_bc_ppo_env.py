@@ -71,22 +71,22 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.20
+    residual_scale: float = 0.29
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
 
-    rew_pose: float = 0.30
-    rew_vel: float = 0.015
-    rew_bc: float = 0.06 # How much rewards being similar to BC prior
+    rew_pose: float = 0.12
+    rew_vel: float = 0.01
+    rew_bc: float = 0.02 # How much rewards being similar to BC prior
 
     # Higher values here prioritize staying upright and not falling. Typical for walking policy big penalty fall and big upright reward
-    rew_upright: float = 5.0
-    rew_height: float = 3.0
-    rew_alive: float = 1.0
-    rew_standing_height: float = 0.8
+    rew_upright: float = 4.5
+    rew_height: float = 2.5
+    rew_alive: float = 0.2
+    rew_standing_height: float = 0.3
 
-    penalty_low_height: float = 8.0
+    penalty_low_height: float = 10.0
     penalty_knee_crouch: float = 0.06
     penalty_knee_collapse: float = 2.0
 
@@ -100,7 +100,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_base_ang_vel: float = 0.35
     penalty_side_tilt: float = 2.0
     penalty_backward_vel: float = 2.0
-    penalty_yaw_rate: float = 0.15
+    penalty_yaw_rate: float = 0.25
 
     min_good_root_height: float = 0.64
     standing_height_start: float = 0.60
@@ -111,17 +111,17 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_knee_asymmetry: float = 0.00
 
     #Walking velocity rewards and penalty
-    target_forward_vel: float = 0.03 # m/s movement forward essentially
-    rew_forward_vel: float = 0.08
+    target_forward_vel: float = 0.04 # m/s movement forward essentially
+    rew_forward_vel: float = 0.4
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
-    rew_lower_body_gait: float = 0.10
+    rew_lower_body_gait: float = 0.12
 
     # Swing / trailing-foot recovery terms for stable gait
-    rew_trailing_foot_recovery: float = 0.40
-    rew_swing_foot_clearance: float = 0.50
-    swing_clearance_target: float = 0.025
-    target_swing_foot_forward_vel: float = 0.05
+    rew_trailing_foot_recovery: float = 1.25
+    rew_swing_foot_clearance: float = 1.25
+    swing_clearance_target: float = 0.045
+    target_swing_foot_forward_vel: float = 0.08
     penalty_foot_x_gap: float = 0.40
     max_foot_x_gap: float = 0.45
 
@@ -142,14 +142,26 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Tuntable contact, airtime and weight distribution terms
     contact_force_threshold: float = 20.0
-    rew_weight_shift: float = 0.45
-    rew_single_support: float = 0.80
-    rew_foot_airtime: float = 0.60
-    penalty_foot_slip: float = 0.35
+    rew_weight_shift: float = 1.20
+    rew_single_support: float = 2.00
+    rew_foot_airtime: float = 0.80
+    penalty_foot_slip: float = 0.50
 
     min_air_time: float = 0.06
     target_air_time: float = 0.20
-    max_contact_foot_speed: float = 0.08
+    max_contact_foot_speed: float = 0.12
+
+    #Reward any foot lift and penalize standing still
+    rew_any_foot_lift: float = 0.50
+    rew_lift_unload: float = 2.00
+    penalty_static_stand: float = 5.00
+
+    #More configurations to force forward step swing behaviour
+    min_counted_lift: float = 0.012
+    rew_forward_swing_step: float = 5.0
+    rew_sustained_swing_air: float = 1.50
+    penalty_toe_tap: float = 2.50
+    penalty_spin_step: float = 2.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -309,6 +321,15 @@ class G1BCPPOEnv(DirectRLEnv):
             "raw_weight_shift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "raw_foot_slip": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "swing_unload": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "static_stand_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "dense_swing_air": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "any_foot_lift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "lift_unload": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "proper_forward_swing": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "toe_tap_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "spin_step_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "sustained_swing_air": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "counted_trailing_lift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
     #Simulation bare bones isaaclab flat environment
@@ -453,7 +474,7 @@ class G1BCPPOEnv(DirectRLEnv):
         right_foot_vel_b = quat_apply_inverse(root_quat_w, right_foot_vel_w - root_lin_vel_w)
 
         # Foot with smaller body-frame x is the trailing foot.
-        left_is_trailing = left_foot_pos_b[:, 0] < right_foot_pos_b[:, 0]
+        left_is_trailing = left_foot_pos_b[:, 0] < right_foot_pos_b[:, 0] # This is currently a reactive phase gait for walking since BC prior is weak and not clear
         foot_x_gap = torch.abs(left_foot_pos_b[:, 0] - right_foot_pos_b[:, 0])
         foot_x_gap_penalty = torch.relu(foot_x_gap - self.cfg.max_foot_x_gap) ** 2
         foot_x_gap_term = -self.cfg.penalty_foot_x_gap * foot_x_gap_penalty
@@ -465,9 +486,17 @@ class G1BCPPOEnv(DirectRLEnv):
         right_foot_z = right_foot_pos_w[:, 2]
         foot_z_min = torch.minimum(left_foot_z, right_foot_z)
 
-        trailing_foot_z = torch.where(left_is_trailing, left_foot_z, right_foot_z,)
+        left_lift = torch.clamp(left_foot_z - foot_z_min, min=0.0)
+        right_lift = torch.clamp(right_foot_z - foot_z_min, min=0.0)
 
+        any_foot_lift = torch.maximum(left_lift, right_lift)
+        any_foot_lift_reward = torch.clamp(any_foot_lift / self.cfg.swing_clearance_target, 0.0, 1.0,)
+        counted_lift_reward = torch.clamp((any_foot_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6),0.0, 1.0,)
+
+        trailing_foot_z = torch.where(left_is_trailing, left_foot_z, right_foot_z,)
         trailing_foot_lift = trailing_foot_z - foot_z_min
+        # trailing foot lift should be rewarded in other terms such as the proper swing forward with the trailing leg in walking gait
+        counted_trailing_lift_reward = torch.clamp( (trailing_foot_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
 
         # Reward the trailing foot moving forward relative to the base.
         trailing_foot_recovery_reward = torch.clamp(trailing_foot_fwd_vel / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
@@ -479,6 +508,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         base_stability_gate = torch.exp(-0.5 * torch.sum(root_ang_vel_b**2, dim=-1))
         height_gate = torch.clamp((root_z - 0.60) / (0.67 - 0.60), 0.0, 1.0) # Robot when moving has bent knees and showed root height between 0.63-0.66 usually
+
 
         # Only reward swing behaviour while reasonably upright/tall and feet are far apart from each-other in walking trail
         #swing_gate = upright_reward * base_stability_gate * height_gate * trailing_gap_gate
@@ -528,8 +558,14 @@ class G1BCPPOEnv(DirectRLEnv):
         # Airtime timers for both feet.
         dt = self.step_dt
 
+        # Reward term for holding feet in the air for longer after lifting foot
         left_new_air_time = self.left_air_time + (1.0 - left_contact) * dt
         right_new_air_time = self.right_air_time + (1.0 - right_contact) * dt
+
+        swing_air_time = torch.where(left_is_trailing, left_new_air_time, right_new_air_time)
+
+        sustained_air_reward = torch.clamp( (swing_air_time - self.cfg.min_air_time) / (self.cfg.target_air_time - self.cfg.min_air_time + 1e-6), 0.0, 1.0,)
+        sustained_swing_air_term = (self.cfg.rew_sustained_swing_air * sustained_air_reward * counted_trailing_lift_reward * support_contact * upright_reward * height_gate)
 
         left_touchdown = (left_contact > 0.5) & (self.prev_left_contact < 0.5)
         right_touchdown = (right_contact > 0.5) & (self.prev_right_contact < 0.5)
@@ -538,6 +574,7 @@ class G1BCPPOEnv(DirectRLEnv):
             left_touchdown,
             torch.clamp(
                 (self.left_air_time - self.cfg.min_air_time)
+
                 / (self.cfg.target_air_time - self.cfg.min_air_time),
                 0.0,
                 1.0,
@@ -577,7 +614,14 @@ class G1BCPPOEnv(DirectRLEnv):
         foot_slip_penalty = left_slip_penalty + right_slip_penalty
         foot_slip_term = -self.cfg.penalty_foot_slip * foot_slip_penalty
 
+
+        
         #-----------------------------Finished contact-aware-------------------------------------------
+
+        support_exists = torch.maximum(left_contact, right_contact)
+
+        # OLD foot lift activity term any_foot_lift_term = (self.cfg.rew_any_foot_lift * any_foot_lift_reward * support_exists * upright_reward * height_gate)
+        any_foot_lift_term = (self.cfg.rew_any_foot_lift * counted_lift_reward * support_exists * upright_reward * height_gate)
 
         action_rate_penalty = torch.mean((self.actions - self.prev_actions) ** 2, dim=-1)
         joint_vel_penalty = torch.mean(qd**2, dim=-1)
@@ -613,7 +657,6 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # Penalise excessive knee flexing. Penalize too much knee asymmetry that would be expected in a stable walk
         knee_angles = q[:, [self.left_knee_idx, self.right_knee_idx]]
-       
         mean_knee_angle = torch.mean(knee_angles, dim=-1)
         max_knee_angle = torch.max(knee_angles, dim=-1).values
 
@@ -623,11 +666,36 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # Only penalise crouching beyond a moderate knee bend. This got bumped up as my robot learnt to survive taller and this was too low
         knee_crouch_penalty = torch.mean(torch.relu(knee_angles - 0.60) ** 2, dim=-1)
-       
         # Only punish severe knee collapse, not normal walking knee bend.
         knee_collapse_penalty = torch.mean(torch.relu(knee_angles - self.cfg.knee_collapse_threshold) ** 2, dim=-1,)
-
         knee_collapse_term = -self.cfg.penalty_knee_collapse * knee_collapse_penalty
+
+        #Reward movement and penalize standing still and not attempting to move forward or swing foot
+        step_activity_reward = torch.clamp(0.70 * counted_lift_reward + 0.30 * single_support_reward, 0.0, 1.0,)
+
+        static_stand_penalty = (1.0 - step_activity_reward) * upright_reward * height_gate
+        static_stand_term = -self.cfg.penalty_static_stand * static_stand_penalty
+
+        
+        # Reward actual airtime lift only not just airtime and then touchdown
+        dense_swing_air_reward = (support_contact * (1.0 - swing_contact) * swing_foot_clearance_reward)
+        dense_swing_air_term = (1.00 * dense_swing_air_reward * upright_reward * height_gate)
+
+        lift_unload_reward = (swing_foot_clearance_reward * weight_shift_reward * support_contact)
+        lift_unload_term = (self.cfg.rew_lift_unload * lift_unload_reward * upright_reward * height_gate)
+
+        #Key term for moving forward with an unloaded foot and support foot
+        forward_swing_reward = torch.clamp(trailing_foot_fwd_vel / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
+        proper_forward_swing_reward = (single_support_reward * counted_trailing_lift_reward * forward_swing_reward * weight_shift_reward)
+        proper_forward_swing_term = (self.cfg.rew_forward_swing_step * proper_forward_swing_reward * upright_reward * height_gate)
+
+        # Noticed in PPO_WALK_004 problems with rewarding short lifts and placing foot back down want to punish this behaviour to encourage stepping
+        toe_tap_penalty = (single_support_reward * (1.0 - counted_trailing_lift_reward) * torch.clamp(torch.abs(trailing_foot_fwd_vel) / 0.05, 0.0, 1.0))
+        toe_tap_term = (-self.cfg.penalty_toe_tap * toe_tap_penalty * upright_reward * height_gate)
+
+        # Noticed in PPO_WALK_004 any foot activity related to walking gait sometimes exceeded yaw rate and started spinning or twitching with the movement
+        spin_step_penalty = single_support_reward * torch.relu(torch.abs(yaw_rate) - 0.35) ** 2
+        spin_step_term = -self.cfg.penalty_spin_step * spin_step_penalty
         
         fallen = root_z < self.cfg.fall_height
 
@@ -663,6 +731,14 @@ class G1BCPPOEnv(DirectRLEnv):
             + trailing_foot_recovery_term
             + swing_foot_clearance_term
             + swing_unload_term
+            + dense_swing_air_term
+            + proper_forward_swing_term
+            + static_stand_term
+            + any_foot_lift_term
+            + toe_tap_term
+            + spin_step_term
+            + sustained_swing_air_term
+            + lift_unload_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -739,6 +815,15 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["raw_weight_shift"] += weight_shift_reward
         self._episode_sums["raw_foot_slip"] += foot_slip_penalty
         self._episode_sums["swing_unload"] += swing_unload_term
+        self._episode_sums["static_stand_penalty"] += static_stand_term
+        self._episode_sums["dense_swing_air"] += dense_swing_air_term
+        self._episode_sums["any_foot_lift"] += any_foot_lift_term
+        self._episode_sums["lift_unload"] += lift_unload_term
+        self._episode_sums["proper_forward_swing"] += proper_forward_swing_term
+        self._episode_sums["toe_tap_penalty"] += toe_tap_term
+        self._episode_sums["spin_step_penalty"] += spin_step_term
+        self._episode_sums["sustained_swing_air"] += sustained_swing_air_term
+        self._episode_sums["counted_trailing_lift"] += counted_trailing_lift_reward
 
         self.prev_actions = self.actions.clone()
 
@@ -805,7 +890,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
 
         # Start all envs from reference frame 0 first. Later, randomize this for robustness when learning.
-        # Changed this to prevent overfitting first step, randomizing gait phase sequence slightly.
+        #Changed this to prevent overfitting first step, randomizing gait phase sequence slightly.
         phase0 = torch.rand(num_reset, device=self.device) * 0.05
         ref_idx0 = torch.remainder((phase0 * self.num_ref_frames).long(), self.num_ref_frames)
 
