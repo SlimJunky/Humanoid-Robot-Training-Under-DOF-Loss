@@ -410,6 +410,8 @@ class G1BCPPOEnv(DirectRLEnv):
             "left_unload_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_drag_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_lift_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_up_vel_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "raw_left_up_vel_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -1125,7 +1127,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # I cant get this left leg to lift in the gait so I want PPO to discover lifting more generally. Simplifying to this term
         left_lift_discovery_term = (
-            8.0
+            12.0
             * left_phase_swing_gate
             * phase_active_gate
             * right_contact
@@ -1137,7 +1139,7 @@ class G1BCPPOEnv(DirectRLEnv):
         )
 
         left_unload_discovery_term = (
-            4.0
+            2.0
             * left_phase_swing_gate
             * phase_active_gate
             * right_contact
@@ -1156,6 +1158,19 @@ class G1BCPPOEnv(DirectRLEnv):
             * (1.0 - left_phase_lift_dense_reward)
             * upright_reward
             * phase_motion_gate
+        )
+        left_up_vel_discovery_reward = torch.clamp(left_foot_vel_w[:, 2] / 0.10, 0.0, 1.0)
+
+        left_up_vel_discovery_term = (
+        4.0
+        * left_phase_swing_gate
+        * phase_active_gate
+        * right_contact
+        * left_unload_discovery_reward
+        * left_up_vel_discovery_reward
+        * upright_reward
+        * height_gate
+        * heading_gate
         )
 
         left_drag_discovery_term = -0.75 * left_drag_discovery_penalty
@@ -1237,6 +1252,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + left_lift_discovery_term
             + left_unload_discovery_term
             + left_drag_discovery_term
+            + left_up_vel_discovery_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -1359,6 +1375,8 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["left_lift_discovery"] += left_lift_discovery_term
         self._episode_sums["left_unload_discovery"] += left_unload_discovery_term
         self._episode_sums["left_drag_discovery"] += left_drag_discovery_term
+        self._episode_sums["left_up_vel_discovery"] += left_up_vel_discovery_term
+        self._episode_sums["raw_left_up_vel_discovery"] += left_up_vel_discovery_reward
         
         self.prev_actions = self.actions.clone()
 
