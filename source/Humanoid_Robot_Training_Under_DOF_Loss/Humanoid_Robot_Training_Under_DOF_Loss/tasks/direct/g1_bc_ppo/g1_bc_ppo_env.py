@@ -176,8 +176,20 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_phase_swing_air: float = 0.5
 
     #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
-    rew_left_phase_lift_boost: float = 1.0
-    rew_left_phase_forward_boost: float = 0.5
+    rew_left_phase_lift_boost: float = 4.0
+    rew_left_phase_forward_boost: float = 1.25
+    rew_left_phase_right_support: float = 1.25
+    rew_left_support_lift_combo: float = 3.0
+    rew_left_step_touchdown: float = 2.0
+
+    #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
+    penalty_left_phase_right_air: float = 2
+    penalty_left_phase_left_heavy: float = 1.25
+    rew_right_stance_for_left: float = 5.0
+    penalty_right_re_lift_during_left_phase: float = 4.0
+    target_right_stance_time: float = 0.12
+    penalty_short_right_stance_for_left: float = 3.0
+
 
 class G1BCPPOEnv(DirectRLEnv):
     cfg: G1BCPPOEnvCfg
@@ -241,6 +253,9 @@ class G1BCPPOEnv(DirectRLEnv):
 
         self.prev_left_contact = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
         self.prev_right_contact = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
+
+        self.left_stance_time = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self.right_stance_time = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
 
         self.lower_body_joint_names = [
             "left_hip_pitch_joint",
@@ -359,6 +374,17 @@ class G1BCPPOEnv(DirectRLEnv):
             "right_phase_lift_dense": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_phase_lift_boost": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_phase_forward_boost": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_phase_right_support": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_support_lift_combo": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_step_touchdown": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_phase_right_air": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_phase_left_heavy": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_stance_for_left": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_re_lift_during_left": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_stance_time": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_load_frac": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_stance_short_for_left": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            
         }
 
     #Simulation bare bones isaaclab flat environment
@@ -649,7 +675,6 @@ class G1BCPPOEnv(DirectRLEnv):
         foot_slip_term = -self.cfg.penalty_foot_slip * foot_slip_penalty
 
 
-        
         #-----------------------------Finished contact-aware-------------------------------------------
 
         support_exists = torch.maximum(left_contact, right_contact)
@@ -882,7 +907,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * left_phase_lift_dense_reward
         * left_phase_swing_gate
         * phase_active_gate
-        * left_phase_support_contact
+        * (0.25 + 0.75 * right_contact)
         * upright_reward
         * phase_motion_gate
         * heading_gate
@@ -901,6 +926,112 @@ class G1BCPPOEnv(DirectRLEnv):
         * heading_gate
         )
 
+       # Soft right-support signal for teaching left swing.
+        force_sum = right_force_z + left_force_z + 1e-6
+        right_load_frac = right_force_z / force_sum
+        left_load_frac = left_force_z / force_sum
+
+        # Becomes non-zero before the right foot fully dominates support.
+        right_support_for_left_reward = (right_contact * torch.clamp((right_load_frac - 0.25) / 0.35, 0.0, 1.0))
+
+        # Mild penalty if, during left-swing phase, the right foot is not available as support.
+        left_phase_right_air_penalty = (
+        (1.0 - right_contact)
+        * left_phase_swing_gate
+        * phase_active_gate
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
+
+        # Mild penalty if the robot keeps too much load on the left foot during left-swing phase.
+        left_phase_left_heavy_penalty = (
+        torch.relu(left_load_frac - 0.75) ** 2
+        * left_phase_swing_gate
+        * phase_active_gate
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
+
+        left_phase_right_air_term = -self.cfg.penalty_left_phase_right_air * left_phase_right_air_penalty
+        left_phase_left_heavy_term = -self.cfg.penalty_left_phase_left_heavy * left_phase_left_heavy_penalty
+
+        # Encourage shifting weight to right leg but lots of reward happens when left foot lifts.
+        left_phase_right_support_term = (
+        self.cfg.rew_left_phase_right_support
+        * right_support_for_left_reward
+        * (0.25 + 0.75 * left_phase_lift_dense_reward)
+        * left_phase_swing_gate
+        * phase_active_gate
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
+
+        # Stronger combined reward term. right foot supports while left foot actually lifts.
+        left_support_lift_combo_term = (
+        self.cfg.rew_left_support_lift_combo
+        * right_support_for_left_reward
+        * left_phase_lift_dense_reward
+        * left_phase_swing_gate
+        * phase_active_gate
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
+
+        # Reward left foot touchdown after being airborne, preferably landing forward of the right foot.
+        left_step_place_reward = torch.clamp((left_foot_pos_b[:, 0] - right_foot_pos_b[:, 0] + 0.02) / 0.10, 0.0, 1.0,)
+
+        left_step_touchdown_term = (
+        self.cfg.rew_left_step_touchdown
+        * left_touchdown.float()
+        * left_airtime_bonus
+        * left_step_place_reward
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
+
+        left_new_stance_time = torch.where(left_contact > 0.5, self.left_stance_time + dt, torch.zeros_like(root_z),)
+
+        right_new_stance_time = torch.where(right_contact > 0.5, self.right_stance_time + dt, torch.zeros_like(root_z),)
+
+        force_sum = left_force_z + right_force_z + 1e-6
+        right_load_frac = right_force_z / force_sum
+        left_load_frac = left_force_z / force_sum
+
+        # During left-swing phase, right foot should be the support foot.
+        left_swing_intent_gate = (
+        left_phase_swing_gate
+        * phase_active_gate
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
+
+        right_stance_time_reward = torch.clamp(right_new_stance_time / self.cfg.target_right_stance_time, 0.0, 1.0,)
+
+        # Allows reward firing when right foot beings standing still more and carrying load
+        right_load_reward = torch.clamp((right_load_frac - 0.15) / 0.35, 0.0, 1.0,)
+
+        right_stance_for_left_term = (
+        self.cfg.rew_right_stance_for_left
+        * right_contact
+        * right_stance_time_reward
+        * right_load_reward
+        * left_swing_intent_gate
+        )
+
+        # Penalise the right foot immediately re-lifting during the left-swing phase,
+    
+        right_re_lift_during_left_penalty = ((1.0 - right_contact) * (1.0 - left_phase_lift_dense_reward) * left_swing_intent_gate)
+
+        right_re_lift_during_left_term = (-self.cfg.penalty_right_re_lift_during_left_phase * right_re_lift_during_left_penalty)
+        right_stance_short_penalty = ((1.0 - torch.clamp(right_new_stance_time / self.cfg.target_right_stance_time, 0.0, 1.0)) * (1.0 - left_phase_lift_dense_reward) * left_swing_intent_gate)
+
+        right_stance_short_for_left_term = (-self.cfg.penalty_short_right_stance_for_left * right_stance_short_penalty)
 
         #Reward movement following the walking gait and penalize standing still and not attempting to move forward or swing foot
         step_activity_reward = torch.clamp(0.70 * phase_lift_reward * phase_active_gate + 0.30 * phase_single_support_reward * phase_active_gate + 0.20 * forward_progress_reward, 0.0, 1.0,)
@@ -957,6 +1088,14 @@ class G1BCPPOEnv(DirectRLEnv):
             + phase_wrong_support_air_term
             + left_phase_lift_boost_term
             + left_phase_forward_boost_term
+            + left_phase_right_support_term
+            + left_support_lift_combo_term
+            + left_step_touchdown_term
+            + left_phase_right_air_term
+            + left_phase_left_heavy_term
+            + right_stance_for_left_term
+            + right_re_lift_during_left_term
+            + right_stance_short_for_left_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -1056,8 +1195,22 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["right_phase_lift_dense"] += right_phase_lift_dense_reward * right_phase_active
         self._episode_sums["left_phase_lift_boost"] += left_phase_lift_boost_term
         self._episode_sums["left_phase_forward_boost"] += left_phase_forward_boost_term
+        self._episode_sums["left_phase_right_support"] += left_phase_right_support_term
+        self._episode_sums["left_support_lift_combo"] += left_support_lift_combo_term
+        self._episode_sums["left_step_touchdown"] += left_step_touchdown_term
+        self._episode_sums["left_phase_right_air"] += left_phase_right_air_term
+        self._episode_sums["left_phase_left_heavy"] += left_phase_left_heavy_term
+        self._episode_sums["right_stance_for_left"] += right_stance_for_left_term
+        self._episode_sums["right_re_lift_during_left"] += right_re_lift_during_left_term
+        self._episode_sums["right_stance_time"] += right_new_stance_time * left_swing_intent_gate
+        self._episode_sums["right_load_frac"] += right_load_frac 
+        self._episode_sums["right_stance_short_for_left"] += right_stance_short_for_left_term
 
         self.prev_actions = self.actions.clone()
+
+        # To know how long each foot has been in contact with the floor
+        self.left_stance_time = left_new_stance_time
+        self.right_stance_time = right_new_stance_time
 
         # Advance phase at the RL control rate.
         control_dt = self.cfg.sim.dt * self.cfg.decimation
@@ -1148,3 +1301,5 @@ class G1BCPPOEnv(DirectRLEnv):
         self.right_air_time[env_ids_t] = 0.0
         self.prev_left_contact[env_ids_t] = 1.0
         self.prev_right_contact[env_ids_t] = 1.0
+        self.left_stance_time[env_ids_t] = 0.0
+        self.right_stance_time[env_ids_t] = 0.0
