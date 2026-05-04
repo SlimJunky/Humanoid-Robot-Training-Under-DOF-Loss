@@ -190,8 +190,12 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     target_right_stance_time: float = 0.06
     penalty_short_right_stance_for_left: float = 5.0
 
+    # Force left foot to lift up right is holding down contact and weight
     rew_left_unload_when_right_ready: float = 2.5
-    rew_left_lift_when_right_ready: float = 14.0
+    rew_left_lift_when_right_ready: float = 18.0
+    rew_left_up_vel_when_right_ready: float = 8.0
+    rew_left_knee_flex_when_right_ready: float = 4.0
+    penalty_left_contact_when_right_ready: float = 1.5
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -389,6 +393,9 @@ class G1BCPPOEnv(DirectRLEnv):
             "right_stance_short_for_left": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_unload_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_lift_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_up_vel_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_knee_flex_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_contact_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -1044,6 +1051,17 @@ class G1BCPPOEnv(DirectRLEnv):
         * right_plant_still_reward
         * left_swing_intent_gate
         )
+        #reward the physical preparation for lift.
+        left_up_vel_reward = torch.clamp(left_foot_vel_b[:, 2] / 0.12, 0.0, 1.0)
+
+        left_knee_flex_reward = torch.clamp((q[:, self.left_knee_idx] - 0.55) / (0.75 - 0.55), 0.0, 1.0,)
+
+        left_up_vel_when_right_ready_term = (self.cfg.rew_left_up_vel_when_right_ready * right_ready_for_left * left_up_vel_reward)
+
+        left_knee_flex_when_right_ready_term = (self.cfg.rew_left_knee_flex_when_right_ready * right_ready_for_left * left_knee_flex_reward * (1.0 - left_phase_lift_dense_reward))
+
+        left_not_trying_to_lift = (1.0 - left_up_vel_reward) * (1.0 - left_knee_flex_reward)
+        left_contact_when_right_ready_term = (-self.cfg.penalty_left_contact_when_right_ready * right_ready_for_left * left_contact * (1.0 - left_phase_lift_dense_reward) * left_not_trying_to_lift)
 
         # Reward unloading the left foot once the right foot is ready.
         # If left_load_frac is high, the left foot is still carrying too much weight.
@@ -1130,6 +1148,9 @@ class G1BCPPOEnv(DirectRLEnv):
             + right_stance_for_left_term
             + right_re_lift_during_left_term
             + right_stance_short_for_left_term
+            + left_up_vel_when_right_ready_term
+            + left_knee_flex_when_right_ready_term
+            + left_contact_when_right_ready_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -1241,6 +1262,9 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["right_stance_short_for_left"] += right_stance_short_for_left_term
         self._episode_sums["left_unload_when_right_ready"] += left_unload_when_right_ready_term
         self._episode_sums["left_lift_when_right_ready"] += left_lift_when_right_ready_term
+        self._episode_sums["left_up_vel_when_right_ready"] += left_up_vel_when_right_ready_term
+        self._episode_sums["left_knee_flex_when_right_ready"] += left_knee_flex_when_right_ready_term
+        self._episode_sums["left_contact_when_right_ready"] += left_contact_when_right_ready_term
         
         self.prev_actions = self.actions.clone()
 
