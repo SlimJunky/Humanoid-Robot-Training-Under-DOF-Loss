@@ -86,8 +86,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_alive: float = 0.2
     rew_standing_height: float = 0.3
 
-    penalty_low_height: float = 10.0
-    penalty_knee_crouch: float = 0.08
+    penalty_low_height: float = 14.0
+    penalty_knee_crouch: float = 0.14
     penalty_knee_collapse: float = 3.0
 
     # PENALTY RATES falling and moving joints out of predicted action
@@ -99,7 +99,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_lateral_vel: float = 0.8
     penalty_base_ang_vel: float = 0.35
     penalty_side_tilt: float = 2.0
-    penalty_backward_vel: float = 2.0
+    penalty_backward_vel: float = 3.0
     penalty_yaw_rate: float = 1.0
 
     min_good_root_height: float = 0.64
@@ -126,10 +126,10 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     max_foot_x_gap: float = 0.45
 
     # Phase-gated stepping terms terms
-    rew_phase_swing_lift: float = 6.0
-    rew_phase_forward_swing: float = 7.0
-    rew_phase_single_support: float = 4.00
-    penalty_wrong_phase_lift: float = 2.0
+    rew_phase_swing_lift: float = 5.0
+    rew_phase_forward_swing: float = 2.5
+    rew_phase_single_support: float = 3.5
+    penalty_wrong_phase_lift: float = 1.25
     phase_gate_power: float = 0.70
 
     '''------------Added contact airtime support rewards--------------------'''
@@ -150,31 +150,34 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # Tuntable contact, airtime and weight distribution terms for leg support during step
     contact_force_threshold: float = 20.0
     rew_weight_shift: float = 0.5
-    rew_single_support: float = 0.75
+    rew_single_support: float = 0.5
     rew_foot_airtime: float = 0.80
-    penalty_foot_slip: float = 0.85
+    penalty_foot_slip: float = 0.65
 
     min_air_time: float = 0.06
     target_air_time: float = 0.20
-    max_contact_foot_speed: float = 0.10
+    max_contact_foot_speed: float = 0.12
 
     #Reward any foot lift and penalize standing still
     rew_any_foot_lift: float = 0.00
-    rew_lift_unload: float = 0.75
-    penalty_static_stand: float = 5.00
+    rew_lift_unload: float = 0.25
+    penalty_static_stand: float = 2.5
 
     #More configurations to force forward step swing behaviour
     min_counted_lift: float = 0.02
-    rew_forward_swing_step: float = 1.25
+    rew_forward_swing_step: float = 0.5
     rew_sustained_swing_air: float = 1.25
     penalty_toe_tap: float = 3.5
     penalty_spin_step: float = 12.0
     
     #Penalities for missing the right phase alternating gait properly
-    penalty_phase_missed_lift: float = 2.0
-    penalty_phase_wrong_support_air: float = 1.5
-    rew_phase_swing_air: float = 1.5
+    penalty_phase_missed_lift: float = 0.25
+    penalty_phase_wrong_support_air: float = 0.25
+    rew_phase_swing_air: float = 0.5
 
+    #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
+    rew_left_phase_lift_boost: float = 1.0
+    rew_left_phase_forward_boost: float = 0.5
 
 class G1BCPPOEnv(DirectRLEnv):
     cfg: G1BCPPOEnvCfg
@@ -350,6 +353,12 @@ class G1BCPPOEnv(DirectRLEnv):
             "phase_swing_air": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "phase_missed_lift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "phase_wrong_support_air": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_phase_lift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_phase_lift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_phase_lift_dense": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_phase_lift_dense": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_phase_lift_boost": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_phase_forward_boost": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
         }
 
     #Simulation bare bones isaaclab flat environment
@@ -536,6 +545,9 @@ class G1BCPPOEnv(DirectRLEnv):
         base_stability_gate = torch.exp(-0.5 * torch.sum(root_ang_vel_b**2, dim=-1))
         height_gate = torch.clamp((root_z - 0.60) / (0.67 - 0.60), 0.0, 1.0) # Robot when moving has bent knees and showed root height between 0.63-0.66 usually
 
+        #When walking and training the phase gait robot abused having the smallest height_gate tanking other penalities and rewards
+        phase_motion_gate = torch.clamp((root_z - 0.56) / (0.66 - 0.56), 0.35, 1.0)
+
 
         # Only reward swing behaviour while reasonably upright/tall and feet are far apart from each-other in walking trail
         #swing_gate = upright_reward * base_stability_gate * height_gate * trailing_gap_gate
@@ -588,9 +600,6 @@ class G1BCPPOEnv(DirectRLEnv):
         # Reward term for holding feet in the air for longer after lifting foot
         left_new_air_time = self.left_air_time + (1.0 - left_contact) * dt
         right_new_air_time = self.right_air_time + (1.0 - right_contact) * dt
-
-        swing_air_time = torch.where(left_is_trailing, left_new_air_time, right_new_air_time)
-        
 
         left_touchdown = (left_contact > 0.5) & (self.prev_left_contact < 0.5)
         right_touchdown = (right_contact > 0.5) & (self.prev_right_contact < 0.5)
@@ -695,7 +704,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # Reward actual airtime lift only not just airtime and then touchdown
         dense_swing_air_reward = (support_contact * (1.0 - swing_contact) * swing_foot_clearance_reward)
-        dense_swing_air_term = (1.00 * dense_swing_air_reward * upright_reward * height_gate * heading_gate)
+        dense_swing_air_term = (0.25 * dense_swing_air_reward * upright_reward * height_gate * heading_gate)
 
         lift_unload_reward = (swing_foot_clearance_reward * weight_shift_reward * support_contact)
         lift_unload_term = (self.cfg.rew_lift_unload * lift_unload_reward * upright_reward * height_gate * heading_gate)
@@ -747,13 +756,31 @@ class G1BCPPOEnv(DirectRLEnv):
         phase_swing_force_z = torch.where(phase_left_should_swing, left_force_z, right_force_z,)
         phase_support_force_z = torch.where(phase_left_should_swing, right_force_z, left_force_z,)
 
-        phase_lift_reward = torch.clamp((phase_swing_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
+        # Dense lift reward that gives learning signal from 0 cm upward.
+        phase_lift_dense_reward = torch.clamp(phase_swing_lift / self.cfg.swing_clearance_target, 0.0, 1.0,)
+        # Counted lift reward only rewards clear lift after small threshold.
+        phase_lift_counted_reward = torch.clamp((phase_swing_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
+
+        # Blend both dense reward and counted reward to help discovery for lifting feet clearance in walking gait
+        phase_lift_reward = 0.60 * phase_lift_dense_reward + 0.40 * phase_lift_counted_reward
+        #phase_lift_reward = torch.clamp((phase_swing_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
         phase_wrong_lift_reward = torch.clamp((phase_wrong_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
 
         phase_forward_swing_reward = torch.clamp(phase_swing_fwd_vel / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
         phase_single_support_reward = phase_support_contact * (1.0 - phase_swing_contact)
-    
+
         phase_weight_shift_reward = torch.clamp((phase_support_force_z - phase_swing_force_z) / (phase_support_force_z + phase_swing_force_z + 1e-6), 0.0, 1.0,)
+
+        '''Logging to determine which leg is being ignored more in phase gait reward'''
+        left_phase_lift_reward = torch.clamp((left_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
+        right_phase_lift_reward = torch.clamp((right_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
+        left_phase_lift_dense_reward = torch.clamp(left_lift / self.cfg.swing_clearance_target, 0.0, 1.0)
+        right_phase_lift_dense_reward = torch.clamp(right_lift / self.cfg.swing_clearance_target, 0.0, 1.0)
+
+        left_phase_active = left_phase_swing_gate * phase_active_gate
+        right_phase_active = right_phase_swing_gate * phase_active_gate
+
+
 
         phase_swing_lift_term = ( 
         self.cfg.rew_phase_swing_lift 
@@ -761,7 +788,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * phase_active_gate 
         * phase_support_gate
         * upright_reward 
-        * height_gate 
+        * phase_motion_gate 
         * heading_gate
         )
 
@@ -773,7 +800,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * phase_weight_shift_reward
         * phase_active_gate
         * upright_reward
-        * height_gate
+        * phase_motion_gate
         * heading_gate
         )
 
@@ -782,7 +809,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * phase_single_support_reward
         * phase_active_gate
         * upright_reward
-        * height_gate
+        * phase_motion_gate
         * heading_gate
         )
 
@@ -791,7 +818,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * phase_wrong_lift_reward
         * phase_active_gate
         * upright_reward
-        * height_gate
+        * phase_motion_gate
         )
 
         phase_swing_air_time = torch.where(phase_left_should_swing, left_new_air_time, right_new_air_time,)
@@ -821,7 +848,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * phase_active_gate
         * phase_support_gate
         * upright_reward
-        * height_gate
+        * phase_motion_gate
         * heading_gate
         )
 
@@ -829,7 +856,7 @@ class G1BCPPOEnv(DirectRLEnv):
         -self.cfg.penalty_phase_missed_lift
         * phase_missed_lift_penalty
         * upright_reward
-        * height_gate
+        * phase_motion_gate
         )
 
         phase_wrong_support_air_term = (
@@ -837,15 +864,47 @@ class G1BCPPOEnv(DirectRLEnv):
         * phase_support_air_wrong
         * phase_active_gate
         * upright_reward
-        * height_gate
+        * phase_motion_gate
         )
 
 
+        # Temporary left leg lift boost reward term
+        left_phase_lift_dense_reward = torch.clamp(left_lift / self.cfg.swing_clearance_target, 0.0, 1.0)
+        right_phase_lift_dense_reward = torch.clamp(right_lift / self.cfg.swing_clearance_target, 0.0, 1.0)
+
+        left_phase_forward_reward = torch.clamp(left_foot_vel_b[:, 0] / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0)
+
+        left_phase_support_contact = right_contact
+        left_unload_reward = torch.clamp((right_force_z - left_force_z) / (right_force_z + left_force_z + 1e-6), 0.0, 1.0)
+
+        left_phase_lift_boost_term = (
+        self.cfg.rew_left_phase_lift_boost
+        * left_phase_lift_dense_reward
+        * left_phase_swing_gate
+        * phase_active_gate
+        * left_phase_support_contact
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
+
+        left_phase_forward_boost_term = (
+        self.cfg.rew_left_phase_forward_boost
+        * left_phase_lift_dense_reward
+        * left_phase_forward_reward
+        * left_unload_reward
+        * left_phase_swing_gate
+        * phase_active_gate
+        * left_phase_support_contact
+        * upright_reward
+        * phase_motion_gate
+        * heading_gate
+        )
 
 
         #Reward movement following the walking gait and penalize standing still and not attempting to move forward or swing foot
         step_activity_reward = torch.clamp(0.70 * phase_lift_reward * phase_active_gate + 0.30 * phase_single_support_reward * phase_active_gate + 0.20 * forward_progress_reward, 0.0, 1.0,)
-        static_stand_penalty = (1.0 - step_activity_reward) * upright_reward * height_gate
+        static_stand_penalty = (1.0 - step_activity_reward) * upright_reward * phase_motion_gate
         static_stand_term = -self.cfg.penalty_static_stand * static_stand_penalty
 
         fallen = root_z < self.cfg.fall_height
@@ -896,6 +955,8 @@ class G1BCPPOEnv(DirectRLEnv):
             + phase_swing_air_term
             + phase_missed_lift_term
             + phase_wrong_support_air_term
+            + left_phase_lift_boost_term
+            + left_phase_forward_boost_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -989,6 +1050,12 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["phase_swing_air"] += phase_swing_air_term
         self._episode_sums["phase_missed_lift"] += phase_missed_lift_term
         self._episode_sums["phase_wrong_support_air"] += phase_wrong_support_air_term
+        self._episode_sums["left_phase_lift"] += left_phase_lift_reward * left_phase_active
+        self._episode_sums["right_phase_lift"] += right_phase_lift_reward * right_phase_active
+        self._episode_sums["left_phase_lift_dense"] += left_phase_lift_dense_reward * left_phase_active
+        self._episode_sums["right_phase_lift_dense"] += right_phase_lift_dense_reward * right_phase_active
+        self._episode_sums["left_phase_lift_boost"] += left_phase_lift_boost_term
+        self._episode_sums["left_phase_forward_boost"] += left_phase_forward_boost_term
 
         self.prev_actions = self.actions.clone()
 
