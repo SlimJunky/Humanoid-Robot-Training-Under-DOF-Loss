@@ -185,10 +185,13 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
     penalty_left_phase_right_air: float = 2
     penalty_left_phase_left_heavy: float = 1.25
-    rew_right_stance_for_left: float = 7.0
+    rew_right_stance_for_left: float = 6.0
     penalty_right_re_lift_during_left_phase: float = 6.0
     target_right_stance_time: float = 0.06
     penalty_short_right_stance_for_left: float = 5.0
+
+    rew_left_unload_when_right_ready: float = 2.0
+    rew_left_lift_when_right_ready: float = 4.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -384,6 +387,8 @@ class G1BCPPOEnv(DirectRLEnv):
             "right_stance_time": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "right_load_frac": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "right_stance_short_for_left": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_unload_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_lift_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -1030,6 +1035,25 @@ class G1BCPPOEnv(DirectRLEnv):
 
         right_stance_for_left_term = (self.cfg.rew_right_stance_for_left * (0.65 * right_support_bridge_reward + 0.35 * right_support_quality_reward) * left_swing_intent_gate)
 
+        # Right support is ready for a left-leg swing.
+        # This gate is only high when the phase wants left swing AND the right foot is planted/load-bearing.
+        right_ready_for_left = (
+        right_contact
+        * right_stance_time_soft
+        * right_load_soft
+        * right_plant_still_reward
+        * left_swing_intent_gate
+        )
+
+        # Reward unloading the left foot once the right foot is ready.
+        # If left_load_frac is high, the left foot is still carrying too much weight.
+        left_unload_when_right_ready_reward = torch.clamp((0.70 - left_load_frac) / 0.30, 0.0, 1.0,)
+
+        left_unload_when_right_ready_term = (self.cfg.rew_left_unload_when_right_ready * right_ready_for_left * left_unload_when_right_ready_reward)
+
+        # Reward actual left foot lift only when the right foot is ready.
+        left_lift_when_right_ready_term = (self.cfg.rew_left_lift_when_right_ready * right_ready_for_left * left_phase_lift_dense_reward)
+
         #Penalise right foot being unavailable during the left-swing phase.
         # This remains active even before the left foot lifts much.
         right_re_lift_during_left_penalty = ((1.0 - right_contact) * (0.50 + 0.50 * (1.0 - left_phase_lift_dense_reward)) * left_swing_intent_gate)
@@ -1101,6 +1125,8 @@ class G1BCPPOEnv(DirectRLEnv):
             + left_step_touchdown_term
             + left_phase_right_air_term
             + left_phase_left_heavy_term
+            + left_unload_when_right_ready_term
+            + left_lift_when_right_ready_term
             + right_stance_for_left_term
             + right_re_lift_during_left_term
             + right_stance_short_for_left_term
@@ -1213,7 +1239,9 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["right_stance_time"] += right_new_stance_time * left_swing_intent_gate
         self._episode_sums["right_load_frac"] += right_load_frac 
         self._episode_sums["right_stance_short_for_left"] += right_stance_short_for_left_term
-
+        self._episode_sums["left_unload_when_right_ready"] += left_unload_when_right_ready_term
+        self._episode_sums["left_lift_when_right_ready"] += left_lift_when_right_ready_term
+        
         self.prev_actions = self.actions.clone()
 
         # To know how long each foot has been in contact with the floor
