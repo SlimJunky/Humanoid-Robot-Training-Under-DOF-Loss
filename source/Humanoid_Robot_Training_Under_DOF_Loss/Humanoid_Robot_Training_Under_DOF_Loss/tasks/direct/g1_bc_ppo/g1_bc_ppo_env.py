@@ -71,7 +71,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.22
+    residual_scale: float = 0.18
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
@@ -112,7 +112,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     #Walking velocity rewards and penalty
     target_forward_vel: float = 0.04 # m/s movement forward essentially
-    rew_forward_vel: float = 0.25
+    rew_forward_vel: float = 0.12
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
     rew_lower_body_gait: float = 0.12
@@ -126,9 +126,9 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     max_foot_x_gap: float = 0.45
 
     # Phase-gated stepping terms terms
-    rew_phase_swing_lift: float = 5.0
-    rew_phase_forward_swing: float = 2.5
-    rew_phase_single_support: float = 3.5
+    rew_phase_swing_lift: float = 3.0
+    rew_phase_forward_swing: float = 1.5
+    rew_phase_single_support: float = 3.0
     penalty_wrong_phase_lift: float = 1.25
     phase_gate_power: float = 0.70
 
@@ -151,7 +151,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     contact_force_threshold: float = 20.0
     rew_weight_shift: float = 0.5
     rew_single_support: float = 0.5
-    rew_foot_airtime: float = 0.80
+    rew_foot_airtime: float = 0.40
     penalty_foot_slip: float = 0.65
 
     min_air_time: float = 0.06
@@ -166,7 +166,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #More configurations to force forward step swing behaviour
     min_counted_lift: float = 0.02
     rew_forward_swing_step: float = 0.5
-    rew_sustained_swing_air: float = 1.25
+    rew_sustained_swing_air: float = 0.6
     penalty_toe_tap: float = 3.5
     penalty_spin_step: float = 12.0
     
@@ -185,10 +185,10 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
     penalty_left_phase_right_air: float = 2
     penalty_left_phase_left_heavy: float = 1.25
-    rew_right_stance_for_left: float = 5.0
-    penalty_right_re_lift_during_left_phase: float = 4.0
-    target_right_stance_time: float = 0.12
-    penalty_short_right_stance_for_left: float = 3.0
+    rew_right_stance_for_left: float = 7.0
+    penalty_right_re_lift_during_left_phase: float = 6.0
+    target_right_stance_time: float = 0.06
+    penalty_short_right_stance_for_left: float = 5.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -1011,28 +1011,36 @@ class G1BCPPOEnv(DirectRLEnv):
         * heading_gate
         )
 
-        right_stance_time_reward = torch.clamp(right_new_stance_time / self.cfg.target_right_stance_time, 0.0, 1.0,)
+        # Reward right foot becoming a real support foot during left-swing phase.
 
-        # Allows reward firing when right foot beings standing still more and carrying load
-        right_load_reward = torch.clamp((right_load_frac - 0.15) / 0.35, 0.0, 1.0,)
 
-        right_stance_for_left_term = (
-        self.cfg.rew_right_stance_for_left
-        * right_contact
-        * right_stance_time_reward
-        * right_load_reward
-        * left_swing_intent_gate
-        )
+        right_stance_time_soft = torch.clamp(right_new_stance_time / 0.06, 0.0, 1.0)
 
-        # Penalise the right foot immediately re-lifting during the left-swing phase,
-    
-        right_re_lift_during_left_penalty = ((1.0 - right_contact) * (1.0 - left_phase_lift_dense_reward) * left_swing_intent_gate)
+        right_stance_time_target = torch.clamp(right_new_stance_time / self.cfg.target_right_stance_time, 0.0, 1.0,)
+
+        right_load_soft = torch.clamp((right_load_frac - 0.10) / 0.30, 0.0, 1.0)
+
+        right_load_target = torch.clamp((right_load_frac - 0.30) / 0.20, 0.0, 1.0)
+
+        right_plant_still_reward = torch.clamp((0.20 - right_foot_speed_xy) / 0.20, 0.0, 1.0,)
+
+        right_support_bridge_reward = (right_contact * right_stance_time_soft * right_load_soft)
+
+        right_support_quality_reward = (right_contact * right_stance_time_target * right_load_target * right_plant_still_reward)
+
+        right_stance_for_left_term = (self.cfg.rew_right_stance_for_left * (0.65 * right_support_bridge_reward + 0.35 * right_support_quality_reward) * left_swing_intent_gate)
+
+        #Penalise right foot being unavailable during the left-swing phase.
+        # This remains active even before the left foot lifts much.
+        right_re_lift_during_left_penalty = ((1.0 - right_contact) * (0.50 + 0.50 * (1.0 - left_phase_lift_dense_reward)) * left_swing_intent_gate)
 
         right_re_lift_during_left_term = (-self.cfg.penalty_right_re_lift_during_left_phase * right_re_lift_during_left_penalty)
-        right_stance_short_penalty = ((1.0 - torch.clamp(right_new_stance_time / self.cfg.target_right_stance_time, 0.0, 1.0)) * (1.0 - left_phase_lift_dense_reward) * left_swing_intent_gate)
 
+        # This specifically discourages the stomp/tap pattern.
+        right_stance_short_penalty = (right_contact * (1.0 - right_stance_time_target) * left_swing_intent_gate)
         right_stance_short_for_left_term = (-self.cfg.penalty_short_right_stance_for_left * right_stance_short_penalty)
 
+        
         #Reward movement following the walking gait and penalize standing still and not attempting to move forward or swing foot
         step_activity_reward = torch.clamp(0.70 * phase_lift_reward * phase_active_gate + 0.30 * phase_single_support_reward * phase_active_gate + 0.20 * forward_progress_reward, 0.0, 1.0,)
         static_stand_penalty = (1.0 - step_activity_reward) * upright_reward * phase_motion_gate
