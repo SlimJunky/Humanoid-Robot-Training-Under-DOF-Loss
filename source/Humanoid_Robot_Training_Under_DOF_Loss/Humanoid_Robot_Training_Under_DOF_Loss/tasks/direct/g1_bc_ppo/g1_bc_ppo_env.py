@@ -127,9 +127,9 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Phase-gated stepping terms terms
     rew_phase_swing_lift: float = 3.0
-    rew_phase_forward_swing: float = 1.5
+    rew_phase_forward_swing: float = 2.0
     rew_phase_single_support: float = 3.0
-    penalty_wrong_phase_lift: float = 1.25
+    penalty_wrong_phase_lift: float = 1.5
     phase_gate_power: float = 0.70
 
     '''------------Added contact airtime support rewards--------------------'''
@@ -194,8 +194,12 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_left_unload_when_right_ready: float = 2.5
     rew_left_lift_when_right_ready: float = 18.0
     rew_left_up_vel_when_right_ready: float = 8.0
-    rew_left_knee_flex_when_right_ready: float = 4.0
+    rew_left_knee_flex_when_right_ready: float = 0.0
     penalty_left_contact_when_right_ready: float = 1.5
+    rew_left_airborne_when_right_ready: float = 10.0
+    rew_left_air_fwd_when_right_ready: float = 8.0
+    penalty_left_drag_during_left_swing: float = 10.0
+    penalty_left_no_lift_when_right_ready: float = 3.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -396,6 +400,10 @@ class G1BCPPOEnv(DirectRLEnv):
             "left_up_vel_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_knee_flex_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_contact_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_airborne_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_air_fwd_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_drag_during_left_swing": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_no_lift_when_right_ready": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -1056,12 +1064,33 @@ class G1BCPPOEnv(DirectRLEnv):
 
         left_knee_flex_reward = torch.clamp((q[:, self.left_knee_idx] - 0.55) / (0.75 - 0.55), 0.0, 1.0,)
 
-        left_up_vel_when_right_ready_term = (self.cfg.rew_left_up_vel_when_right_ready * right_ready_for_left * left_up_vel_reward)
+        left_unload_gate = torch.clamp((0.65 - left_load_frac) / 0.35, 0.0, 1.0)
+        left_up_vel_when_right_ready_term = (self.cfg.rew_left_up_vel_when_right_ready  * left_unload_gate * right_ready_for_left * left_up_vel_reward)
 
         left_knee_flex_when_right_ready_term = (self.cfg.rew_left_knee_flex_when_right_ready * right_ready_for_left * left_knee_flex_reward * (1.0 - left_phase_lift_dense_reward))
 
         left_not_trying_to_lift = (1.0 - left_up_vel_reward) * (1.0 - left_knee_flex_reward)
         left_contact_when_right_ready_term = (-self.cfg.penalty_left_contact_when_right_ready * right_ready_for_left * left_contact * (1.0 - left_phase_lift_dense_reward) * left_not_trying_to_lift)
+
+        left_airborne_reward = 1.0 - left_contact
+        left_forward_motion_reward = torch.clamp(left_foot_vel_b[:, 0] / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
+        
+        left_airborne_when_right_ready_term = (self.cfg.rew_left_airborne_when_right_ready * right_ready_for_left * left_airborne_reward * (0.25 + 0.75 * left_phase_lift_dense_reward))
+        left_air_fwd_when_right_ready_term = (self.cfg.rew_left_air_fwd_when_right_ready * right_ready_for_left * left_airborne_reward * left_phase_lift_dense_reward * left_forward_motion_reward)
+        left_drag_forward_amount = torch.clamp(left_foot_vel_b[:, 0] / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
+
+        left_drag_during_left_swing_penalty = (
+            left_contact
+            * left_drag_forward_amount
+            * (1.0 - left_phase_lift_dense_reward)
+            * right_contact
+            * right_load_soft
+            * left_swing_intent_gate
+            )
+
+        left_drag_during_left_swing_term = (-self.cfg.penalty_left_drag_during_left_swing * left_drag_during_left_swing_penalty)
+        left_no_lift_when_right_ready_penalty = (right_ready_for_left * torch.clamp((0.012 - left_lift) / 0.012, 0.0, 1.0))
+        left_no_lift_when_right_ready_term = (-self.cfg.penalty_left_no_lift_when_right_ready * left_no_lift_when_right_ready_penalty)
 
         # Reward unloading the left foot once the right foot is ready.
         # If left_load_frac is high, the left foot is still carrying too much weight.
@@ -1151,6 +1180,10 @@ class G1BCPPOEnv(DirectRLEnv):
             + left_up_vel_when_right_ready_term
             + left_knee_flex_when_right_ready_term
             + left_contact_when_right_ready_term
+            + left_airborne_when_right_ready_term
+            + left_air_fwd_when_right_ready_term
+            + left_drag_during_left_swing_term
+            + left_no_lift_when_right_ready_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -1265,6 +1298,10 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["left_up_vel_when_right_ready"] += left_up_vel_when_right_ready_term
         self._episode_sums["left_knee_flex_when_right_ready"] += left_knee_flex_when_right_ready_term
         self._episode_sums["left_contact_when_right_ready"] += left_contact_when_right_ready_term
+        self._episode_sums["left_airborne_when_right_ready"] += left_airborne_when_right_ready_term
+        self._episode_sums["left_air_fwd_when_right_ready"] += left_air_fwd_when_right_ready_term
+        self._episode_sums["left_drag_during_left_swing"] += left_drag_during_left_swing_term
+        self._episode_sums["left_no_lift_when_right_ready"] += left_no_lift_when_right_ready_term
         
         self.prev_actions = self.actions.clone()
 
