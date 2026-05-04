@@ -160,7 +160,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     #Reward any foot lift and penalize standing still
     rew_any_foot_lift: float = 0.00
-    rew_lift_unload: float = 0.25
+    rew_lift_unload: float = 0.35
     penalty_static_stand: float = 2.5
 
     #More configurations to force forward step swing behaviour
@@ -172,26 +172,26 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     
     #Penalities for missing the right phase alternating gait properly
     penalty_phase_missed_lift: float = 0.25
-    penalty_phase_wrong_support_air: float = 0.25
+    penalty_phase_wrong_support_air: float = 0.5
     rew_phase_swing_air: float = 0.5
 
     #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
-    rew_left_phase_lift_boost: float = 4.0
-    rew_left_phase_forward_boost: float = 1.25
-    rew_left_phase_right_support: float = 1.25
-    rew_left_support_lift_combo: float = 3.0
-    rew_left_step_touchdown: float = 2.0
+    rew_left_phase_lift_boost: float = 8.0
+    rew_left_phase_forward_boost: float = 4.0
+    rew_left_phase_right_support: float = 2.0
+    rew_left_support_lift_combo: float = 7.0
+    rew_left_step_touchdown: float = 3.0
 
     #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
     penalty_left_phase_right_air: float = 2
     penalty_left_phase_left_heavy: float = 1.25
-    rew_right_stance_for_left: float = 6.0
+    rew_right_stance_for_left: float = 5.0
     penalty_right_re_lift_during_left_phase: float = 6.0
     target_right_stance_time: float = 0.06
     penalty_short_right_stance_for_left: float = 5.0
 
-    rew_left_unload_when_right_ready: float = 2.0
-    rew_left_lift_when_right_ready: float = 4.0
+    rew_left_unload_when_right_ready: float = 2.5
+    rew_left_lift_when_right_ready: float = 14.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
