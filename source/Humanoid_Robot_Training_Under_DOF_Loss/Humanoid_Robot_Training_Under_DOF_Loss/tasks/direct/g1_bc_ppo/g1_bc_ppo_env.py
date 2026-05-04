@@ -932,7 +932,7 @@ class G1BCPPOEnv(DirectRLEnv):
         left_load_frac = left_force_z / force_sum
 
         # Becomes non-zero before the right foot fully dominates support.
-        right_support_for_left_reward = (right_contact * torch.clamp((right_load_frac - 0.25) / 0.35, 0.0, 1.0))
+        right_support_for_left_reward = (right_contact * torch.clamp((right_load_frac - 0.15) / 0.35, 0.0, 1.0))
 
         # Mild penalty if, during left-swing phase, the right foot is not available as support.
         left_phase_right_air_penalty = (
