@@ -111,7 +111,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_knee_asymmetry: float = 0.00
 
     #Walking velocity rewards and penalty
-    target_forward_vel: float = 0.8 # m/s movement forward essentially
+    target_forward_vel: float = 0.10 # m/s movement forward essentially
     rew_forward_vel: float = 0.14
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
@@ -126,9 +126,9 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     max_foot_x_gap: float = 0.42
 
     # Phase-gated stepping terms terms
-    rew_phase_swing_lift: float = 0.9
-    rew_phase_forward_swing: float = 0.55
-    rew_phase_single_support: float = 0.75
+    rew_phase_swing_lift: float = 1.4
+    rew_phase_forward_swing: float = 1.0
+    rew_phase_single_support: float = 0.9
     penalty_wrong_phase_lift: float = 0.75
     phase_gate_power: float = 0.70
 
@@ -154,8 +154,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_foot_airtime: float = 0.45
     penalty_foot_slip: float = 0.7
 
-    min_air_time: float = 0.06
-    target_air_time: float = 0.24
+    min_air_time: float = 0.025
+    target_air_time: float = 0.12
     max_contact_foot_speed: float = 0.12
 
     #Reward any foot lift and penalize standing still
@@ -173,11 +173,11 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #Penalities for missing the right phase alternating gait properly
     penalty_phase_missed_lift: float = 0.0
     penalty_phase_wrong_support_air: float = 0.25
-    rew_phase_swing_air: float = 0.4
+    rew_phase_swing_air: float = 0.8
 
     #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
-    rew_left_phase_lift_boost: float = 2.5
-    rew_left_phase_forward_boost: float = 1.0
+    rew_left_phase_lift_boost: float = 1.6
+    rew_left_phase_forward_boost: float = 0.8
     rew_left_phase_right_support: float = 1.5
     rew_left_support_lift_combo: float = 1.0
     rew_left_step_touchdown: float = 2.0
@@ -204,11 +204,15 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_left_no_lift_when_right_ready: float = 7.0
     penalty_left_load_during_left_swing: float = 2.0
 
-    # Stage 2B: improve gait quality after step discovery
+    
     rew_phase_airtime_hold: float = 0.45
-    rew_phase_air_forward: float = 1.0
-    penalty_swing_lateral_vel: float = 0.5
-    rew_forward_direction: float = 0.20
+    rew_phase_air_forward: float = 1.6
+    rew_forward_direction: float = 0.35
+    rew_phase_high_lift: float = 1.2
+    target_phase_lift: float = 0.055
+
+    penalty_swing_lateral_vel: float = 0.70
+    penalty_lateral_dominance: float = 5.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -423,6 +427,8 @@ class G1BCPPOEnv(DirectRLEnv):
             "phase_air_forward": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "swing_lateral_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "forward_direction": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "lateral_dominance_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "phase_high_lift": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -741,8 +747,11 @@ class G1BCPPOEnv(DirectRLEnv):
         backward_term = -self.cfg.penalty_backward_vel * backward_penalty
         yaw_rate_term = -self.cfg.penalty_yaw_rate * yaw_rate_penalty
 
-        # Sideways drift is bad during survival training.
+        # Sideways drift is bad during survival training and during forward gait step
         lateral_vel_penalty = root_lin_vel_b[:, 1] ** 2
+        lateral_dominance_penalty = torch.relu(torch.abs(root_lin_vel_b[:, 1]) - 0.65 * torch.relu(forward_vel)) ** 2
+        lateral_dominance_term = (-self.cfg.penalty_lateral_dominance * lateral_dominance_penalty * upright_reward * height_gate)
+        
 
         # Excessive base rotation usually appears before falling.
         base_ang_vel_penalty = torch.sum(root_ang_vel_b**2, dim=-1)
@@ -834,7 +843,18 @@ class G1BCPPOEnv(DirectRLEnv):
         phase_lift_reward = 0.60 * phase_lift_dense_reward + 0.40 * phase_lift_counted_reward
         #phase_lift_reward = torch.clamp((phase_swing_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
         phase_wrong_lift_reward = torch.clamp((phase_wrong_lift - self.cfg.min_counted_lift) / (self.cfg.swing_clearance_target - self.cfg.min_counted_lift + 1e-6), 0.0, 1.0,)
+        phase_high_lift_reward = torch.clamp((phase_swing_lift - 0.015) / (self.cfg.target_phase_lift - 0.015 + 1e-6), 0.0, 1.0,)
 
+        phase_high_lift_term = (
+        self.cfg.rew_phase_high_lift
+        * phase_high_lift_reward
+        * phase_active_gate
+        * phase_support_gate
+        * upright_reward
+        * height_gate
+        * heading_gate
+        )
+        
         phase_forward_swing_reward = torch.clamp(phase_swing_fwd_vel / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0,)
         phase_single_support_reward = phase_support_contact * (1.0 - phase_swing_contact)
 
@@ -900,7 +920,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # Dense reward for keeping the correct swing foot airborne a little longer.
         # Starts rewarding after about 0.03s, saturates around 0.16s.
-        phase_airtime_hold_reward = torch.clamp( (phase_swing_air_time - 0.03) / (0.12 - 0.010 + 1e-6), 0.0, 1.0,)
+        phase_airtime_hold_reward = torch.clamp( (phase_swing_air_time - 0.005) / (0.09 - 0.005 + 1e-6), 0.0, 1.0,)
 
         phase_airtime_hold_term = (
         self.cfg.rew_phase_airtime_hold
@@ -1152,7 +1172,6 @@ class G1BCPPOEnv(DirectRLEnv):
         left_lift_demand_gate = (
             left_phase_swing_gate
             * phase_active_gate
-            * right_contact
             * right_support_ready_for_left
             * upright_reward
             * phase_motion_gate
@@ -1197,7 +1216,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # I cant get this left leg to lift in the gait so I want PPO to discover lifting more generally. Simplifying to this term
         left_lift_discovery_term = (
-            10.0
+            6
             * left_phase_swing_gate
             * phase_active_gate
             * right_contact
@@ -1233,7 +1252,7 @@ class G1BCPPOEnv(DirectRLEnv):
         left_up_vel_discovery_reward = torch.clamp(left_foot_vel_w[:, 2] / 0.10, 0.0, 1.0)
 
         left_up_vel_discovery_term = (
-        3.5
+        2.5
         * left_phase_swing_gate
         * phase_active_gate
         * right_contact
@@ -1330,6 +1349,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + left_up_vel_discovery_term
             + phase_airtime_hold_term
             + phase_air_forward_term
+            + phase_high_lift_term
             + swing_lateral_term
             + forward_direction_term
             + foot_x_gap_term
@@ -1340,6 +1360,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + action_rate_term
             + joint_vel_term
             + lateral_vel_term
+            + lateral_dominance_term
             + base_ang_vel_term
             + side_tilt_term
             + low_height_term
@@ -1460,6 +1481,8 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["phase_air_forward"] += phase_air_forward_term
         self._episode_sums["swing_lateral_penalty"] += swing_lateral_term
         self._episode_sums["forward_direction"] += forward_direction_term
+        self._episode_sums["lateral_dominance_penalty"] += lateral_dominance_term
+        self._episode_sums["phase_high_lift"] += phase_high_lift_term
         
         self.prev_actions = self.actions.clone()
 
