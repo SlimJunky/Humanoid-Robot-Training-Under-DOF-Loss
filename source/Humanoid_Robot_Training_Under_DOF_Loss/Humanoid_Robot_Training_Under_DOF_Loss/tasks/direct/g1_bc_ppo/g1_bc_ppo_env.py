@@ -91,7 +91,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_knee_collapse: float = 3.0
 
     # PENALTY RATES falling and moving joints out of predicted action
-    penalty_action_rate: float = 0.02
+    penalty_action_rate: float = 0.025
     penalty_joint_vel: float = 0.001
     penalty_fall: float = 15.0
 
@@ -122,12 +122,12 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_swing_foot_clearance: float = 0.00
     swing_clearance_target: float = 0.045
     target_swing_foot_forward_vel: float = 0.08
-    penalty_foot_x_gap: float = 0.60
-    max_foot_x_gap: float = 0.34
+    penalty_foot_x_gap: float = 0.5
+    max_foot_x_gap: float = 0.42
 
     # Phase-gated stepping terms terms
-    rew_phase_swing_lift: float = 1.2
-    rew_phase_forward_swing: float = 0.65
+    rew_phase_swing_lift: float = 0.9
+    rew_phase_forward_swing: float = 0.55
     rew_phase_single_support: float = 0.75
     penalty_wrong_phase_lift: float = 0.75
     phase_gate_power: float = 0.70
@@ -152,7 +152,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_weight_shift: float = 0.5
     rew_single_support: float = 0.5
     rew_foot_airtime: float = 0.45
-    penalty_foot_slip: float = 0.65
+    penalty_foot_slip: float = 0.7
 
     min_air_time: float = 0.06
     target_air_time: float = 0.24
@@ -166,14 +166,14 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #More configurations to force forward step swing behaviour
     min_counted_lift: float = 0.02
     rew_forward_swing_step: float = 0.6
-    rew_sustained_swing_air: float = 1.2
+    rew_sustained_swing_air: float = 1.0
     penalty_toe_tap: float = 3.5
     penalty_spin_step: float = 12.0
     
     #Penalities for missing the right phase alternating gait properly
     penalty_phase_missed_lift: float = 0.0
     penalty_phase_wrong_support_air: float = 0.25
-    rew_phase_swing_air: float = 0.45
+    rew_phase_swing_air: float = 0.4
 
     #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
     rew_left_phase_lift_boost: float = 2.5
@@ -183,26 +183,26 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_left_step_touchdown: float = 0.0
 
     #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
-    penalty_left_phase_right_air: float = 1.5
+    penalty_left_phase_right_air: float = 2.0
     penalty_left_phase_left_heavy: float = 1.25
-    penalty_right_re_lift_during_left_phase: float = 1.0
-    penalty_short_right_stance_for_left: float = 0.75
+    penalty_right_re_lift_during_left_phase: float = 1.5
+    penalty_short_right_stance_for_left: float = 1.0
     rew_right_stance_for_left: float = 1.5
     target_right_stance_time: float = 0.06
     
 
     # Force left foot to lift up right is holding down contact and weight, became overcomplicated so didn't use later
     rew_left_unload_when_right_ready: float = 0.0
-    rew_left_lift_when_right_ready: float = 2.0
-    rew_left_up_vel_when_right_ready: float = 0.8
+    rew_left_lift_when_right_ready: float = 2.5
+    rew_left_up_vel_when_right_ready: float = 1.0
     rew_left_knee_flex_when_right_ready: float = 0.0
-    rew_left_airborne_when_right_ready: float = 1.2
-    rew_left_air_fwd_when_right_ready: float = 0.8
+    rew_left_airborne_when_right_ready: float = 1.5
+    rew_left_air_fwd_when_right_ready: float = 1.0
 
     penalty_left_contact_when_right_ready: float = 2.0
-    penalty_left_drag_during_left_swing: float = 1.25
-    penalty_left_no_lift_when_right_ready: float = 4.0
-    penalty_left_load_during_left_swing: float = 1.0
+    penalty_left_drag_during_left_swing: float = 1.5
+    penalty_left_no_lift_when_right_ready: float = 5.0
+    penalty_left_load_during_left_swing: float = 1.5
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -1104,7 +1104,7 @@ class G1BCPPOEnv(DirectRLEnv):
             * heading_gate
             )
 
-        left_required_lift = 0.040
+        left_required_lift = 0.045
 
         left_drag_during_left_swing_term = (-self.cfg.penalty_left_drag_during_left_swing * left_drag_during_left_swing_penalty)
         left_no_lift_when_right_ready_penalty = (left_lift_demand_gate * torch.clamp((left_required_lift - left_lift) / left_required_lift, 0.0, 1.0))
@@ -1148,7 +1148,7 @@ class G1BCPPOEnv(DirectRLEnv):
             * right_contact
             * (0.25 + 0.75 * left_unload_discovery_reward)
             * left_phase_lift_dense_reward
-            * (0.50 + 0.50 * left_phase_forward_reward)
+            * (0.55 + 0.45 * left_phase_forward_reward)
             * upright_reward
             * height_gate
             * heading_gate
