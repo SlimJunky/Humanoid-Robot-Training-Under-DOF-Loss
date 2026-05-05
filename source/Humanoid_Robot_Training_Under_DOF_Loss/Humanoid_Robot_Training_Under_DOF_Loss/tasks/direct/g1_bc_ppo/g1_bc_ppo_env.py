@@ -191,7 +191,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     target_right_stance_time: float = 0.06
     
 
-    # Force left foot to lift up right is holding down contact and weight
+    # Force left foot to lift up right is holding down contact and weight, became overcomplicated so didn't use later
     rew_left_unload_when_right_ready: float = 0.0
     rew_left_lift_when_right_ready: float = 0.0
     rew_left_up_vel_when_right_ready: float = 0.0
