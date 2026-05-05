@@ -201,7 +201,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     penalty_left_contact_when_right_ready: float = 2.0
     penalty_left_drag_during_left_swing: float = 1.5
-    penalty_left_no_lift_when_right_ready: float = 5.0
+    penalty_left_no_lift_when_right_ready: float = 7.0
     penalty_left_load_during_left_swing: float = 1.5
 
 
