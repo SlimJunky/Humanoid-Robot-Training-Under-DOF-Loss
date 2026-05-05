@@ -71,7 +71,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
-    residual_scale: float = 0.18
+    residual_scale: float = 0.15
     target_root_height: float = 0.70
     fall_height: float = 0.55
     gait_period_s: float = 4.25
@@ -178,20 +178,20 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
     rew_left_phase_lift_boost: float = 2.5
     rew_left_phase_forward_boost: float = 1.0
-    rew_left_phase_right_support: float = 1.25
-    rew_left_support_lift_combo: float = 0.0
-    rew_left_step_touchdown: float = 0.0
+    rew_left_phase_right_support: float = 1.5
+    rew_left_support_lift_combo: float = 1.0
+    rew_left_step_touchdown: float = 2.0
 
     #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
     penalty_left_phase_right_air: float = 2.0
     penalty_left_phase_left_heavy: float = 1.25
     penalty_right_re_lift_during_left_phase: float = 1.5
-    penalty_short_right_stance_for_left: float = 1.0
-    rew_right_stance_for_left: float = 1.5
-    target_right_stance_time: float = 0.06
+    penalty_short_right_stance_for_left: float = 1.25
+    rew_right_stance_for_left: float = 1.8
+    target_right_stance_time: float = 0.07
     
 
-    # Force left foot to lift up right is holding down contact and weight, became overcomplicated so didn't use later
+    # Force left foot to lift up right is holding down contact and weight, became overcomplicated so didnt use for discovering lift just to stabalize
     rew_left_unload_when_right_ready: float = 0.0
     rew_left_lift_when_right_ready: float = 2.5
     rew_left_up_vel_when_right_ready: float = 1.0
@@ -199,10 +199,10 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_left_airborne_when_right_ready: float = 1.5
     rew_left_air_fwd_when_right_ready: float = 1.0
 
-    penalty_left_contact_when_right_ready: float = 2.0
-    penalty_left_drag_during_left_swing: float = 1.5
+    penalty_left_contact_when_right_ready: float = 2.8
+    penalty_left_drag_during_left_swing: float = 2.0
     penalty_left_no_lift_when_right_ready: float = 7.0
-    penalty_left_load_during_left_swing: float = 1.5
+    penalty_left_load_during_left_swing: float = 2.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -1148,7 +1148,7 @@ class G1BCPPOEnv(DirectRLEnv):
             * right_contact
             * (0.25 + 0.75 * left_unload_discovery_reward)
             * left_phase_lift_dense_reward
-            * (0.55 + 0.45 * left_phase_forward_reward)
+            * (0.50 + 0.50 * left_phase_forward_reward)
             * upright_reward
             * height_gate
             * heading_gate
@@ -1178,7 +1178,7 @@ class G1BCPPOEnv(DirectRLEnv):
         left_up_vel_discovery_reward = torch.clamp(left_foot_vel_w[:, 2] / 0.10, 0.0, 1.0)
 
         left_up_vel_discovery_term = (
-        3.0
+        3.5
         * left_phase_swing_gate
         * phase_active_gate
         * right_contact
@@ -1191,10 +1191,10 @@ class G1BCPPOEnv(DirectRLEnv):
 
         left_drag_discovery_term = -0.75 * left_drag_discovery_penalty
 
-        
+        both_feet_contact = left_contact * right_contact
         #Reward movement following the walking gait and penalize standing still and not attempting to move forward or swing foot
-        step_activity_reward = torch.clamp(0.70 * phase_lift_reward * phase_active_gate + 0.30 * phase_single_support_reward * phase_active_gate + 0.20 * forward_progress_reward, 0.0, 1.0,)
-        static_stand_penalty = (1.0 - step_activity_reward) * upright_reward * phase_motion_gate
+        step_activity_reward = torch.clamp(0.55 * phase_lift_reward * phase_active_gate + 0.25 * phase_single_support_reward * phase_active_gate + 0.20 * forward_progress_reward, 0.0, 1.0,)
+        static_stand_penalty = (1.0 - step_activity_reward) * both_feet_contact * upright_reward * phase_motion_gate
         static_stand_term = -self.cfg.penalty_static_stand * static_stand_penalty
 
         fallen = root_z < self.cfg.fall_height

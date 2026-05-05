@@ -2,12 +2,12 @@ from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
 '''PPO configuration class for the RL algorithm used with my g1 environment. Follows same structure as RS-RL PPO used in G1 locomotion configs
-where the runner contains num_steps_per_env and max_iterations as actor/critic MLP configuration and around PPO algorithm settings'''
+where the runner contains num_steps_per_env and max_iterations as actor/critic MLP configuration and around PPO algorithm settings specified in dissertation paper'''
 @configclass
 class G1BCPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000
-    save_interval = 200
+    save_interval = 25
     experiment_name = "g1_bc_ppo_walk"
 
     policy = RslRlPpoActorCriticCfg(
