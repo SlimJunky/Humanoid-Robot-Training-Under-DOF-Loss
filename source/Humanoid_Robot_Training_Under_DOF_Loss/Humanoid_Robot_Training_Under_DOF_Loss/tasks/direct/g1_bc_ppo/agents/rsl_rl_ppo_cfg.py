@@ -7,7 +7,7 @@ where the runner contains num_steps_per_env and max_iterations as actor/critic M
 class G1BCPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
     max_iterations = 3000
-    save_interval = 25
+    save_interval = 100
     experiment_name = "g1_bc_ppo_walk"
 
     policy = RslRlPpoActorCriticCfg(
