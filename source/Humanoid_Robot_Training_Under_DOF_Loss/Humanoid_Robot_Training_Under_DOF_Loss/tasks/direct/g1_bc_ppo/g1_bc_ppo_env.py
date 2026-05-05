@@ -96,7 +96,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_fall: float = 15.0
 
     # Lateral balance stability terms higher values reward more staying central
-    penalty_lateral_vel: float = 1.4
+    penalty_lateral_vel: float = 1.6
     penalty_base_ang_vel: float = 0.35
     penalty_side_tilt: float = 2.4
     penalty_backward_vel: float = 4.0
@@ -111,8 +111,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_knee_asymmetry: float = 0.00
 
     #Walking velocity rewards and penalty
-    target_forward_vel: float = 0.05 # m/s movement forward essentially
-    rew_forward_vel: float = 0.10
+    target_forward_vel: float = 0.8 # m/s movement forward essentially
+    rew_forward_vel: float = 0.14
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
     rew_lower_body_gait: float = 0.12
@@ -203,6 +203,12 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_left_drag_during_left_swing: float = 2.0
     penalty_left_no_lift_when_right_ready: float = 7.0
     penalty_left_load_during_left_swing: float = 2.0
+
+    # Stage 2B: improve gait quality after step discovery
+    rew_phase_airtime_hold: float = 0.45
+    rew_phase_air_forward: float = 1.0
+    penalty_swing_lateral_vel: float = 0.5
+    rew_forward_direction: float = 0.20
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -413,6 +419,10 @@ class G1BCPPOEnv(DirectRLEnv):
             "left_lift_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "left_up_vel_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "raw_left_up_vel_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "phase_airtime_hold": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "phase_air_forward": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "swing_lateral_penalty": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "forward_direction": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -718,6 +728,10 @@ class G1BCPPOEnv(DirectRLEnv):
         forward_progress_reward = torch.clamp( forward_vel / self.cfg.target_forward_vel, 0.0, 1.0,)
         forward_vel_reward = forward_progress_reward
 
+        forward_direction_reward = torch.clamp((forward_vel - torch.abs(root_lin_vel_b[:, 1])) / self.cfg.target_forward_vel, 0.0, 1.0,)
+        forward_direction_term = (self.cfg.rew_forward_direction * forward_direction_reward * upright_reward * standing_height_reward)
+
+
         #Key balance gate metric introduced to help forward term reward with moving forward while standing upright
         balance_gate = upright_reward * standing_height_reward
 
@@ -880,8 +894,47 @@ class G1BCPPOEnv(DirectRLEnv):
         )
 
         phase_swing_air_time = torch.where(phase_left_should_swing, left_new_air_time, right_new_air_time,)
-
         phase_sustained_air_reward = torch.clamp((phase_swing_air_time - self.cfg.min_air_time) / (self.cfg.target_air_time - self.cfg.min_air_time + 1e-6), 0.0, 1.0,)
+
+        phase_swing_lateral_vel = torch.where(phase_left_should_swing, left_foot_vel_b[:, 1], right_foot_vel_b[:, 1],)
+
+        # Dense reward for keeping the correct swing foot airborne a little longer.
+        # Starts rewarding after about 0.03s, saturates around 0.16s.
+        phase_airtime_hold_reward = torch.clamp( (phase_swing_air_time - 0.03) / (0.12 - 0.010 + 1e-6), 0.0, 1.0,)
+
+        phase_airtime_hold_term = (
+        self.cfg.rew_phase_airtime_hold
+        * phase_airtime_hold_reward
+        * phase_lift_reward
+        * phase_active_gate
+        * upright_reward
+        * height_gate
+        * heading_gate
+        )
+
+        # Reward airborne swing only when it is also moving forward.
+        phase_air_forward_term = (
+        self.cfg.rew_phase_air_forward
+        * phase_airtime_hold_reward
+        * phase_lift_reward
+        * phase_forward_swing_reward
+        * phase_active_gate
+        * upright_reward
+        * height_gate
+        * heading_gate
+        )
+
+        # Penalise sideways swing motion while the foot is lifted.
+        swing_lateral_penalty = (
+        phase_swing_lateral_vel ** 2
+        * phase_lift_reward
+        * phase_active_gate
+        * upright_reward
+        * height_gate
+        )
+
+        swing_lateral_term = -self.cfg.penalty_swing_lateral_vel * swing_lateral_penalty
+
 
         sustained_swing_air_term = (self.cfg.rew_sustained_swing_air
         * phase_sustained_air_reward
@@ -1094,11 +1147,13 @@ class G1BCPPOEnv(DirectRLEnv):
             * left_swing_intent_gate
             )
         
+        right_support_ready_for_left = (right_contact * right_stance_time_soft * right_load_soft * right_plant_still_reward)
+
         left_lift_demand_gate = (
             left_phase_swing_gate
             * phase_active_gate
             * right_contact
-            * torch.clamp((right_load_frac - 0.25) / 0.25, 0.0, 1.0)
+            * right_support_ready_for_left
             * upright_reward
             * phase_motion_gate
             * heading_gate
@@ -1142,7 +1197,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # I cant get this left leg to lift in the gait so I want PPO to discover lifting more generally. Simplifying to this term
         left_lift_discovery_term = (
-            12.0
+            10.0
             * left_phase_swing_gate
             * phase_active_gate
             * right_contact
@@ -1196,6 +1251,10 @@ class G1BCPPOEnv(DirectRLEnv):
         step_activity_reward = torch.clamp(0.55 * phase_lift_reward * phase_active_gate + 0.25 * phase_single_support_reward * phase_active_gate + 0.20 * forward_progress_reward, 0.0, 1.0,)
         static_stand_penalty = (1.0 - step_activity_reward) * both_feet_contact * upright_reward * phase_motion_gate
         static_stand_term = -self.cfg.penalty_static_stand * static_stand_penalty
+
+
+
+
 
         fallen = root_z < self.cfg.fall_height
 
@@ -1269,6 +1328,10 @@ class G1BCPPOEnv(DirectRLEnv):
             + left_unload_discovery_term
             + left_drag_discovery_term
             + left_up_vel_discovery_term
+            + phase_airtime_hold_term
+            + phase_air_forward_term
+            + swing_lateral_term
+            + forward_direction_term
             + foot_x_gap_term
             + weight_shift_term
             + single_support_term
@@ -1393,6 +1456,10 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["left_drag_discovery"] += left_drag_discovery_term
         self._episode_sums["left_up_vel_discovery"] += left_up_vel_discovery_term
         self._episode_sums["raw_left_up_vel_discovery"] += left_up_vel_discovery_reward
+        self._episode_sums["phase_airtime_hold"] += phase_airtime_hold_term
+        self._episode_sums["phase_air_forward"] += phase_air_forward_term
+        self._episode_sums["swing_lateral_penalty"] += swing_lateral_term
+        self._episode_sums["forward_direction"] += forward_direction_term
         
         self.prev_actions = self.actions.clone()
 
