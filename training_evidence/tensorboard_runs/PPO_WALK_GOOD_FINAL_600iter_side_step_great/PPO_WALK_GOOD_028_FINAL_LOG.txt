@@ -1,0 +1,150 @@
+################################################################################
+                         Learning iteration 11992/11993                          
+
+                            Total steps: 7372800 
+                       Steps per second: 4770 
+                        Collection time: 2.280s 
+                          Learning time: 0.296s 
+                        Mean value loss: 827.0452
+                    Mean surrogate loss: -0.0037
+                      Mean entropy loss: 85.4252
+                            Mean reward: 3574.32
+                    Mean episode length: 461.12
+                        Mean action std: 2.97
+                           Episode/pose: 0.1118
+                            Episode/vel: 0.0078
+                             Episode/bc: 0.0187
+                        Episode/upright: 4.2262
+                         Episode/height: 2.4393
+                          Episode/alive: 0.2000
+            Episode/action_rate_penalty: -0.0041
+              Episode/joint_vel_penalty: -0.0009
+                   Episode/fall_penalty: -0.0021
+                          Episode/total: 7.8216
+                    Episode/root_height: 0.6894
+                     Episode/pose_error: 0.1070
+                 Episode/bc_residual_l2: 0.0172
+            Episode/lateral_vel_penalty: -0.1466
+           Episode/base_ang_vel_penalty: -0.3059
+              Episode/side_tilt_penalty: -0.0386
+               Episode/lateral_velocity: 0.2015
+                   Episode/base_ang_vel: 0.4108
+             Episode/low_height_penalty: -0.0012
+            Episode/knee_crouch_penalty: -0.0045
+                Episode/mean_knee_angle: 0.7162
+          Episode/knee_collapse_penalty: -0.0018
+                 Episode/max_knee_angle: 0.8132
+                Episode/left_knee_angle: 0.7038
+               Episode/right_knee_angle: 0.7287
+                 Episode/knee_asymmetry: 0.1940
+         Episode/knee_asymmetry_penalty: 0.0000
+                Episode/standing_height: 0.2915
+                    Episode/forward_vel: 0.1511
+             Episode/forward_vel_reward: 0.0557
+               Episode/backward_penalty: -0.0096
+               Episode/yaw_rate_penalty: -0.3658
+                Episode/lower_body_gait: 0.0937
+               Episode/lower_body_error: 0.0316
+         Episode/trailing_foot_recovery: 0.0000
+           Episode/swing_foot_clearance: 0.0000
+             Episode/trailing_foot_lift: 0.0240
+          Episode/trailing_foot_fwd_vel: -0.0079
+                     Episode/foot_x_gap: 0.1095
+             Episode/foot_x_gap_penalty: 0.0000
+                   Episode/left_contact: 0.4472
+                  Episode/right_contact: 0.7945
+                   Episode/left_force_z: 102.0533
+                  Episode/right_force_z: 218.9496
+                   Episode/weight_shift: 0.2345
+                 Episode/single_support: 0.1521
+                   Episode/foot_airtime: 0.0246
+              Episode/foot_slip_penalty: -0.1387
+                  Episode/left_air_time: 0.0776
+                 Episode/right_air_time: 0.0111
+             Episode/raw_single_support: 0.5211
+               Episode/raw_foot_airtime: 0.0579
+               Episode/raw_weight_shift: 0.6193
+                  Episode/raw_foot_slip: 0.1981
+                   Episode/swing_unload: 0.1474
+           Episode/static_stand_penalty: -0.3778
+                Episode/dense_swing_air: 0.0715
+                  Episode/any_foot_lift: 0.0000
+                    Episode/lift_unload: 0.1472
+           Episode/proper_forward_swing: 0.0835
+                Episode/toe_tap_penalty: -0.5755
+              Episode/spin_step_penalty: -0.2581
+            Episode/sustained_swing_air: 0.0938
+          Episode/counted_trailing_lift: 0.3495
+               Episode/phase_swing_lift: 0.1935
+            Episode/phase_forward_swing: 0.0867
+           Episode/phase_single_support: 0.1605
+               Episode/wrong_phase_lift: -0.0807
+              Episode/phase_active_gate: 0.6478
+                Episode/phase_swing_air: 0.1431
+              Episode/phase_missed_lift: 0.0000
+        Episode/phase_wrong_support_air: -0.0516
+                Episode/left_phase_lift: 0.1119
+               Episode/right_phase_lift: 0.0222
+          Episode/left_phase_lift_dense: 0.1330
+         Episode/right_phase_lift_dense: 0.0417
+          Episode/left_phase_lift_boost: 0.0667
+       Episode/left_phase_forward_boost: 0.0165
+       Episode/left_phase_right_support: 0.1305
+        Episode/left_support_lift_combo: 0.0761
+         Episode/right_phase_lift_boost: 0.0884
+      Episode/right_phase_forward_boost: 0.0292
+       Episode/right_support_lift_combo: 0.0323
+            Episode/left_step_touchdown: 0.0062
+           Episode/left_phase_right_air: -0.0502
+          Episode/left_phase_left_heavy: -0.0020
+          Episode/right_stance_for_left: 0.1592
+      Episode/right_re_lift_during_left: -0.0372
+              Episode/right_stance_time: 0.0286
+                Episode/right_load_frac: 0.6824
+    Episode/right_stance_short_for_left: -0.0129
+   Episode/left_unload_when_right_ready: 0.0000
+     Episode/left_lift_when_right_ready: 0.0204
+   Episode/left_up_vel_when_right_ready: 0.0066
+Episode/left_knee_flex_when_right_ready: 0.0000
+  Episode/left_contact_when_right_ready: -0.0017
+ Episode/left_airborne_when_right_ready: 0.0078
+  Episode/left_air_fwd_when_right_ready: 0.0045
+    Episode/left_drag_during_left_swing: -0.0100
+  Episode/left_no_lift_when_right_ready: -0.0323
+    Episode/left_load_during_left_swing: -0.0037
+          Episode/left_unload_discovery: 0.2318
+            Episode/left_drag_discovery: -0.0100
+            Episode/left_lift_discovery: 0.1879
+          Episode/left_up_vel_discovery: 0.0806
+      Episode/raw_left_up_vel_discovery: 0.3579
+             Episode/phase_airtime_hold: 0.0494
+              Episode/phase_air_forward: 0.0951
+          Episode/swing_lateral_penalty: -0.0748
+              Episode/forward_direction: 0.1856
+      Episode/lateral_dominance_penalty: -0.2338
+                Episode/phase_high_lift: 0.1263
+  Episode/right_no_lift_when_left_ready: -0.0919
+   Episode/right_up_vel_when_left_ready: 0.0398
+ Episode/right_airborne_when_left_ready: 0.0175
+           Episode/right_lift_discovery: 0.0940
+         Episode/right_up_vel_discovery: 0.0693
+           Episode/right_drag_discovery: -0.0088
+     Episode/raw_right_up_vel_discovery: 0.2037
+           Episode/right_step_touchdown: 0.0116
+          Episode/left_stance_for_right: 0.0461
+     Episode/left_stance_time_for_right: 0.0158
+       Episode/left_load_frac_for_right: 0.0944
+   Episode/left_support_ready_for_right: 0.1609
+         Episode/right_lift_demand_gate: 0.0243
+      Episode/right_lift_discovery_gate: 0.0918
+   Episode/right_phase_missed_lift_soft: -0.1085
+              Episode/mean_length_steps: 470.9306
+            Episode/mean_length_seconds: 7.8488
+             Episode_Termination/fallen: 0.0833
+           Episode_Termination/time_out: 1.5417
+        Episode_Termination/fallen_rate: 0.0347
+      Episode_Termination/time_out_rate: 0.9653
+--------------------------------------------------------------------------------
+                         Iteration time: 2.58s
+                           Time elapsed: 00:25:23
+                                    ETA: 00:00:00
