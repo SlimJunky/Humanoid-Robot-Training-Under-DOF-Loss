@@ -1,8 +1,15 @@
 # Fault-Tolerant Humanoid Motion: Evaluating Imitation Learning and Reinforcement Learning under Degree-of-Freedom Loss
 
-This study investigates the robustness of humanoid control policies trained using imitation learning and reinforcement learning within a simulated environment. The primary research question is: how does an on-policy reinforcement learning algorithm perform under partial actuator or sensor failure, and which degrees of freedom (DoFs) are most critical for maintaining stable locomotion? 
+This study investigates the robustness of humanoid locomotion policies trained using imitation learning and reinforcement learning in a simulated environment. The central research question is: **how does an on-policy reinforcement learning controller respond to partial actuator or degree-of-freedom failure, and which joints are most critical for maintaining stable locomotion?**
 
-To test my hypothesis, this repository will act as a foundation for training and fine tuning a PPO Reinforcement algorithm on a weak BC imitation learning prior from a selected mapped motion. Then a series of experiments are ran on the the pen-ultimate stable policy controller that is walking forward and meets certain criteria. I believe under these experiments, the on-policy PPO RL algorithm used within many sim-to-real is pushed to its limits to test how robust a custom trained policy on a Unitree-G1 asset is. I am interested in particularly at which point in partial actuator failure results in an almost guranteed fall and which Degrees Of Freedom are particularly important on the locomotion and stability of the asset compared to other joints.
+The project uses a minimal Unitree G1 humanoid asset in Isaac Lab then a weak Behavioral Cloning (BC) policy is first trained from selected retargeted walking demonstrations and then used as a prior for Proximal Policy Optimisation (PPO). Rather than learning locomotion entirely from scratch, the PPO controller learns residual joint corrections around the BC policy output, allowing it to improve stability, balance, and forward stepping behaviour initially.
+
+Once a stable baseline locomotion policy is obtained, it is evaluated under controlled fault conditions. These include partial torque reduction and complete joint locking applied after a fixed point in the episode. The resulting behaviour is measured using metrics such as survival time, fall rate, root height, forward velocity, lateral drift, base angular velocity, joint-torque usage and other values.
+
+The objective  of this study is not to achieve perfect human-like walking, but to evaluate the fault tolerance of a learned humanoid controller under degree-of-freedom loss. By comparing nominal and faulty runs, the experiments aim to identify which joints have the greatest effect on locomotion stability and determine the point at which actuator degradation leads to policy failure.
+
+Below is some helpful suggestions on how to run important key scripts and how to download this external Isaac Lab project template onto your device to hopefully view or experiment on independently or validate the results from the disseration paper this repository is supporting.
+
 
 
 
