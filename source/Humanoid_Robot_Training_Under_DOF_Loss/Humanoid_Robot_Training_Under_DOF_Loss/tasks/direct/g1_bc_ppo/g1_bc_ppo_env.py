@@ -96,7 +96,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_fall: float = 15.0
 
     # Lateral balance stability terms higher values reward more staying central
-    penalty_lateral_vel: float = 2.0
+    penalty_lateral_vel: float = 2.4
     penalty_base_ang_vel: float = 0.35
     penalty_side_tilt: float = 2.4
     penalty_backward_vel: float = 4.0
@@ -176,15 +176,15 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_phase_swing_air: float = 0.8
 
     #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
-    rew_left_phase_lift_boost: float = 0.85
+    rew_left_phase_lift_boost: float = 0.70
     rew_left_phase_forward_boost: float = 0.3
-    rew_left_phase_right_support: float = 1.5
-    rew_left_support_lift_combo: float = 1.0
-    rew_left_step_touchdown: float = 2.0
+    rew_left_phase_right_support: float = 1.25
+    rew_left_support_lift_combo: float = 0.8
+    rew_left_step_touchdown: float = 1.5
 
-    rew_right_phase_lift_boost: float = 3.0
-    rew_right_phase_forward_boost: float = 1.8
-    rew_right_support_lift_combo: float = 1.0
+    rew_right_phase_lift_boost: float = 4.0
+    rew_right_phase_forward_boost: float = 2.0
+    rew_right_support_lift_combo: float = 1.5
     rew_right_step_touchdown: float = 1.2
 
     #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
@@ -204,11 +204,11 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_left_airborne_when_right_ready: float = 1.5
     rew_left_air_fwd_when_right_ready: float = 1.0
 
-    rew_right_up_vel_when_left_ready: float = 2.0
+    rew_right_up_vel_when_left_ready: float = 3.0
     rew_right_airborne_when_left_ready: float = 1.5
-    penalty_right_no_lift_when_left_ready: float = 6.0
+    penalty_right_no_lift_when_left_ready: float = 7.0
     target_right_lift: float = 0.045
-    rew_right_lift_discovery: float = 6.0
+    rew_right_lift_discovery: float = 7.0
     rew_right_up_vel_discovery: float = 3.0
 
     # Mirrored support preparation for right-foot swing
@@ -223,16 +223,18 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_left_no_lift_when_right_ready: float = 7.0
     penalty_left_load_during_left_swing: float = 2.0
     penalty_right_drag_discovery: float = 0.75
+    penalty_right_phase_missed_lift_soft: float = 1.4
 
     
     rew_phase_airtime_hold: float = 0.45
     rew_phase_air_forward: float = 1.4
-    rew_forward_direction: float = 0.45
+    rew_forward_direction: float = 0.8
     rew_phase_high_lift: float = 1.2
     target_phase_lift: float = 0.055
 
-    penalty_swing_lateral_vel: float = 1.15
-    penalty_lateral_dominance: float = 7.0
+    penalty_swing_lateral_vel: float = 1.3
+    penalty_lateral_dominance: float = 9.0
+
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -466,6 +468,7 @@ class G1BCPPOEnv(DirectRLEnv):
             "left_support_ready_for_right": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "right_lift_demand_gate": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "right_lift_discovery_gate": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_phase_missed_lift_soft": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -906,6 +909,20 @@ class G1BCPPOEnv(DirectRLEnv):
         left_phase_lift_dense_reward = torch.clamp(left_lift / self.cfg.swing_clearance_target, 0.0, 1.0)
         right_phase_lift_dense_reward = torch.clamp(right_lift / self.cfg.swing_clearance_target, 0.0, 1.0)
 
+        right_phase_missed_lift_soft_penalty = (
+            right_phase_swing_gate
+            * phase_active_gate
+            * torch.clamp((self.cfg.target_right_lift - right_lift) / self.cfg.target_right_lift, 0.0, 1.0)
+            * (0.35 + 0.65 * left_contact)
+            * upright_reward
+            * height_gate
+            * heading_gate
+        )
+
+        right_phase_missed_lift_soft_term = (-self.cfg.penalty_right_phase_missed_lift_soft * right_phase_missed_lift_soft_penalty)
+
+
+
         left_phase_active = left_phase_swing_gate * phase_active_gate
         right_phase_active = right_phase_swing_gate * phase_active_gate
 
@@ -989,7 +1006,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * right_touchdown.float()
         * right_airtime_bonus
         * right_step_place_reward
-        * left_contact
+        * (0.35 + 0.65 * left_contact)
         * upright_reward
         * height_gate
         * heading_gate
@@ -1018,7 +1035,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * right_phase_swing_gate
         * phase_active_gate
         * (0.35 + 0.65 * left_support_soft_for_right_forward)
-        * (0.15 + 0.85 * left_contact)
+        * (0.35 + 0.65 * left_contact)
         * upright_reward
         * height_gate
         * heading_gate
@@ -1533,6 +1550,7 @@ class G1BCPPOEnv(DirectRLEnv):
             + right_up_vel_discovery_term
             + right_drag_discovery_term
             + right_step_touchdown_term
+            + right_phase_missed_lift_soft_term
             + phase_airtime_hold_term
             + phase_air_forward_term
             + phase_high_lift_term
@@ -1686,6 +1704,8 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["left_support_ready_for_right"] += left_support_ready_for_right
         self._episode_sums["right_lift_demand_gate"] += right_lift_demand_gate
         self._episode_sums["right_lift_discovery_gate"] += right_lift_discovery_gate
+        self._episode_sums["right_phase_missed_lift_soft"] += right_phase_missed_lift_soft_term
+
 
         self.prev_actions = self.actions.clone()
 
