@@ -1,10 +1,13 @@
 
+
+from __future__ import annotations
+
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 # Inspect amass cmu mocap SMPL+H download files. Reads the.npz files and tries to make a guess based on rough motion type data and filename keywords 
 # To create a JSON and CSV with information about the different poses that i can match up with the dataset website.
 # Those clips will then be used as the required motion capture data and a skeleton will be mapped onto Unitree G1. 
-
-
-from __future__ import annotations
 
 import argparse
 import csv

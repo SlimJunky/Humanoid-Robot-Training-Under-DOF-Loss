@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Export a robomimic BC .pth checkpoint into a plain TorchScript .pt policy. Input: obs_vec: [B, 75]  to [q, qd, phase]
 Output: action: [B, 37] into normalized action. All BC trained on normalized actions. 
 This exported .pt can then be loaded from the Windows Isaac Lab G1 playback script without needing robomimic installed in the Windows Isaac Lab environment.
 """
+
+'''Warning, this will not work unless you are in described robomimic environment'''
 
 import argparse
 from pathlib import Path
