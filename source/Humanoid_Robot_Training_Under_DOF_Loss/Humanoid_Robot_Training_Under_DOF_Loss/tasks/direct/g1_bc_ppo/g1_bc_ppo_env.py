@@ -111,7 +111,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     penalty_knee_asymmetry: float = 0.00
 
     #Walking velocity rewards and penalty
-    target_forward_vel: float = 0.10 # m/s movement forward essentially
+    target_forward_vel: float = 0.12 # m/s movement forward essentially
     rew_forward_vel: float = 0.16
 
     #Reward specifically lower body movement in a gait cycle matching BC prior
@@ -176,8 +176,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_phase_swing_air: float = 0.8
 
     #Tempt to allow the left leg to catch up reward wise for lifting in alternating gait
-    rew_left_phase_lift_boost: float = 1.0
-    rew_left_phase_forward_boost: float = 0.4
+    rew_left_phase_lift_boost: float = 0.85
+    rew_left_phase_forward_boost: float = 0.3
     rew_left_phase_right_support: float = 1.5
     rew_left_support_lift_combo: float = 1.0
     rew_left_step_touchdown: float = 2.0
@@ -185,6 +185,7 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     rew_right_phase_lift_boost: float = 3.0
     rew_right_phase_forward_boost: float = 1.8
     rew_right_support_lift_combo: float = 1.0
+    rew_right_step_touchdown: float = 1.2
 
     #Terms to help alternating leg support, particularly stopping right leg from swinging forward and becoming more of a support leg
     penalty_left_phase_right_air: float = 2.0
@@ -197,18 +198,24 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     # Force left foot to lift up right is holding down contact and weight, became overcomplicated so didnt use for discovering lift just to stabalize mirrored for right foot
     rew_left_unload_when_right_ready: float = 0.0
-    rew_left_lift_when_right_ready: float = 2.5
+    rew_left_lift_when_right_ready: float = 2.0
     rew_left_up_vel_when_right_ready: float = 1.0
     rew_left_knee_flex_when_right_ready: float = 0.0
     rew_left_airborne_when_right_ready: float = 1.5
     rew_left_air_fwd_when_right_ready: float = 1.0
 
-    rew_right_up_vel_when_left_ready: float = 1.5
-    rew_right_airborne_when_left_ready: float = 1.2
-    penalty_right_no_lift_when_left_ready: float = 4.0
+    rew_right_up_vel_when_left_ready: float = 2.0
+    rew_right_airborne_when_left_ready: float = 1.5
+    penalty_right_no_lift_when_left_ready: float = 6.0
     target_right_lift: float = 0.045
-    rew_right_lift_discovery: float = 4.0
-    rew_right_up_vel_discovery: float = 2.0
+    rew_right_lift_discovery: float = 6.0
+    rew_right_up_vel_discovery: float = 3.0
+
+    # Mirrored support preparation for right-foot swing
+    rew_left_stance_for_right: float = 1.5
+    penalty_short_left_stance_for_right: float = 1.0
+    target_left_stance_time: float = 0.06
+
 
     
     penalty_left_contact_when_right_ready: float = 2.8
@@ -219,13 +226,13 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     
     rew_phase_airtime_hold: float = 0.45
-    rew_phase_air_forward: float = 1.9
-    rew_forward_direction: float = 0.65
-    rew_phase_high_lift: float = 1.4
+    rew_phase_air_forward: float = 1.4
+    rew_forward_direction: float = 0.45
+    rew_phase_high_lift: float = 1.2
     target_phase_lift: float = 0.055
 
-    penalty_swing_lateral_vel: float = 1.0
-    penalty_lateral_dominance: float = 6.0
+    penalty_swing_lateral_vel: float = 1.15
+    penalty_lateral_dominance: float = 7.0
 
 
 class G1BCPPOEnv(DirectRLEnv):
@@ -452,6 +459,13 @@ class G1BCPPOEnv(DirectRLEnv):
             "right_up_vel_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "right_drag_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             "raw_right_up_vel_discovery": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_step_touchdown": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_stance_for_right": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_stance_time_for_right": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_load_frac_for_right": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "left_support_ready_for_right": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_lift_demand_gate": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
+            "right_lift_discovery_gate": torch.zeros(self.num_envs, dtype=torch.float32, device=self.device),
             
         }
 
@@ -736,6 +750,9 @@ class G1BCPPOEnv(DirectRLEnv):
         left_foot_speed_xy = torch.norm(left_foot_vel_b[:, :2], dim=-1)
         right_foot_speed_xy = torch.norm(right_foot_vel_b[:, :2], dim=-1)
 
+        left_new_stance_time = torch.where(left_contact > 0.5, self.left_stance_time + dt, torch.zeros_like(root_z),)
+        right_new_stance_time = torch.where(right_contact > 0.5, self.right_stance_time + dt, torch.zeros_like(root_z),)
+
         left_slip_penalty = left_contact * torch.relu(left_foot_speed_xy - self.cfg.max_contact_foot_speed) ** 2
         right_slip_penalty = right_contact * torch.relu(right_foot_speed_xy - self.cfg.max_contact_foot_speed) ** 2
 
@@ -904,37 +921,55 @@ class G1BCPPOEnv(DirectRLEnv):
         right_unload_reward = torch.clamp((0.70 - right_load_frac_for_forward) / 0.40, 0.0, 1.0)
         left_support_soft_for_right_forward = torch.clamp((left_load_frac_for_forward - 0.20) / 0.35, 0.0, 1.0)
         left_support_for_right_reward = (left_contact * torch.clamp((left_load_frac_for_forward - 0.15) / 0.35, 0.0, 1.0))
+        left_stance_time_soft = torch.clamp(left_new_stance_time / 0.06, 0.0, 1.0)
+        left_stance_time_target = torch.clamp(left_new_stance_time / self.cfg.target_left_stance_time, 0.0, 1.0)
+        left_load_soft = torch.clamp((left_load_frac_for_forward - 0.10) / 0.30, 0.0, 1.0)
+        left_plant_still_reward = torch.clamp((0.20 - left_foot_speed_xy) / 0.20, 0.0, 1.0)
+        left_load_target = torch.clamp((left_load_frac_for_forward - 0.30) / 0.20, 0.0, 1.0)
+        left_support_bridge_reward = left_contact * left_stance_time_soft * left_load_soft
+        left_support_quality_reward = left_contact * left_stance_time_target * left_load_target * left_plant_still_reward
         left_support_for_right_soft = (left_contact * torch.clamp((left_load_frac_for_forward - 0.20) / 0.35, 0.0, 1.0))
-        left_support_ready_for_right = (left_support_for_right_reward * torch.clamp((0.20 - left_foot_speed_xy) / 0.20, 0.0, 1.0))
+        left_support_ready_for_right = (left_contact * left_stance_time_soft * left_load_soft * (0.50 + 0.50 * left_plant_still_reward))
         right_up_vel_discovery_reward = torch.clamp(right_foot_vel_w[:, 2] / 0.10, 0.0, 1.0)
+        left_support_soft_gate_for_right = 0.5 + 0.5 * left_support_ready_for_right
+
+
+        left_stance_for_right_term = (
+        self.cfg.rew_left_stance_for_right
+        * (0.65 * left_support_bridge_reward + 0.35 * left_support_quality_reward)
+        * right_phase_swing_gate
+        * phase_active_gate
+        * upright_reward
+        * height_gate
+        * heading_gate
+        )
 
 
         right_lift_discovery_gate = (
-        right_phase_swing_gate
-        * phase_active_gate
-        * left_contact
-        * (0.35 + 0.65 * left_support_for_right_soft)
-        * upright_reward
-        * height_gate
-        * heading_gate
+            right_phase_swing_gate
+            * phase_active_gate
+            * left_support_soft_gate_for_right
+            * upright_reward
+            * height_gate
+            * heading_gate
         )
 
         right_lift_discovery_term = (
-        self.cfg.rew_right_lift_discovery
-        * right_lift_discovery_gate
-        * right_phase_lift_dense_reward
-        * (0.35 + 0.7 * right_phase_forward_reward)
+            self.cfg.rew_right_lift_discovery
+            * right_lift_discovery_gate
+            * right_phase_lift_dense_reward
+            * (0.35 + 0.65 * right_phase_forward_reward)
         )
 
         right_up_vel_discovery_term = (
-        self.cfg.rew_right_up_vel_discovery
-        * right_phase_swing_gate
-        * phase_active_gate
-        * left_contact
-        * right_up_vel_discovery_reward
-        * upright_reward
-        * height_gate
-        * heading_gate
+            self.cfg.rew_right_up_vel_discovery
+            * right_phase_swing_gate
+            * phase_active_gate
+            * left_support_soft_gate_for_right
+            * right_up_vel_discovery_reward
+            * upright_reward
+            * height_gate
+            * heading_gate
         )
 
         right_drag_discovery_penalty = (
@@ -943,9 +978,24 @@ class G1BCPPOEnv(DirectRLEnv):
         * right_contact
         * torch.clamp(right_foot_vel_b[:, 0] / self.cfg.target_swing_foot_forward_vel, 0.0, 1.0)
         * (1.0 - right_phase_lift_dense_reward)
+        * (0.25 + 0.75 * left_support_ready_for_right)
         * upright_reward
         * phase_motion_gate
         )
+
+        right_step_place_reward = torch.clamp((right_foot_pos_b[:, 0] - left_foot_pos_b[:, 0] + 0.02) / 0.10, 0.0, 1.0,)
+        right_step_touchdown_term = (
+        self.cfg.rew_right_step_touchdown
+        * right_touchdown.float()
+        * right_airtime_bonus
+        * right_step_place_reward
+        * left_contact
+        * upright_reward
+        * height_gate
+        * heading_gate
+        )
+
+
 
         right_drag_discovery_term = (-self.cfg.penalty_right_drag_discovery* right_drag_discovery_penalty)
 
@@ -968,7 +1018,7 @@ class G1BCPPOEnv(DirectRLEnv):
         * right_phase_swing_gate
         * phase_active_gate
         * (0.35 + 0.65 * left_support_soft_for_right_forward)
-        * left_contact
+        * (0.15 + 0.85 * left_contact)
         * upright_reward
         * height_gate
         * heading_gate
@@ -995,7 +1045,7 @@ class G1BCPPOEnv(DirectRLEnv):
         )
 
         right_up_vel_reward = torch.clamp(right_foot_vel_b[:, 2] / 0.10, 0.0, 1.0)
-        right_no_lift_penalty = (right_lift_demand_gate * torch.clamp( (self.cfg.target_right_lift - right_lift) / self.cfg.target_right_lift, 0.0,1.0,))
+        right_no_lift_penalty = (right_lift_demand_gate * torch.clamp( (self.cfg.target_right_lift - right_lift) / self.cfg.target_right_lift, 0.0, 1.0,))
         right_no_lift_term = (-self.cfg.penalty_right_no_lift_when_left_ready * right_no_lift_penalty)
         right_up_vel_when_left_ready_term = (self.cfg.rew_right_up_vel_when_left_ready * right_lift_demand_gate * right_up_vel_reward)
         right_airborne_when_left_ready_term = (self.cfg.rew_right_airborne_when_left_ready * right_lift_demand_gate * (1.0 - right_contact) * (0.25 + 0.75 * right_phase_lift_dense_reward))
@@ -1228,9 +1278,6 @@ class G1BCPPOEnv(DirectRLEnv):
         * heading_gate
         )
 
-        left_new_stance_time = torch.where(left_contact > 0.5, self.left_stance_time + dt, torch.zeros_like(root_z),)
-
-        right_new_stance_time = torch.where(right_contact > 0.5, self.right_stance_time + dt, torch.zeros_like(root_z),)
 
         force_sum = left_force_z + right_force_z + 1e-6
         right_load_frac = right_force_z / force_sum
@@ -1344,7 +1391,7 @@ class G1BCPPOEnv(DirectRLEnv):
 
         # I cant get this left leg to lift in the gait so I want PPO to discover lifting more generally. Simplifying to this term
         left_lift_discovery_term = (
-            3
+            2.5
             * left_phase_swing_gate
             * phase_active_gate
             * right_contact
@@ -1357,7 +1404,7 @@ class G1BCPPOEnv(DirectRLEnv):
         )
 
         left_unload_discovery_term = (
-            2.0
+            1.8
             * left_phase_swing_gate
             * phase_active_gate
             * right_contact
@@ -1481,9 +1528,11 @@ class G1BCPPOEnv(DirectRLEnv):
             + right_no_lift_term
             + right_up_vel_when_left_ready_term
             + right_airborne_when_left_ready_term
+            + left_stance_for_right_term
             + right_lift_discovery_term
             + right_up_vel_discovery_term
             + right_drag_discovery_term
+            + right_step_touchdown_term
             + phase_airtime_hold_term
             + phase_air_forward_term
             + phase_high_lift_term
@@ -1626,11 +1675,18 @@ class G1BCPPOEnv(DirectRLEnv):
         self._episode_sums["right_no_lift_when_left_ready"] += right_no_lift_term
         self._episode_sums["right_up_vel_when_left_ready"] += right_up_vel_when_left_ready_term
         self._episode_sums["right_airborne_when_left_ready"] += right_airborne_when_left_ready_term
+        self._episode_sums["right_step_touchdown"] += right_step_touchdown_term
         self._episode_sums["right_lift_discovery"] += right_lift_discovery_term
         self._episode_sums["right_up_vel_discovery"] += right_up_vel_discovery_term
         self._episode_sums["right_drag_discovery"] += right_drag_discovery_term
         self._episode_sums["raw_right_up_vel_discovery"] += right_up_vel_discovery_reward
-        
+        self._episode_sums["left_stance_for_right"] += left_stance_for_right_term
+        self._episode_sums["left_stance_time_for_right"] += left_new_stance_time * right_phase_swing_gate * phase_active_gate
+        self._episode_sums["left_load_frac_for_right"] += (left_load_frac_for_forward * right_phase_swing_gate * phase_active_gate)
+        self._episode_sums["left_support_ready_for_right"] += left_support_ready_for_right
+        self._episode_sums["right_lift_demand_gate"] += right_lift_demand_gate
+        self._episode_sums["right_lift_discovery_gate"] += right_lift_discovery_gate
+
         self.prev_actions = self.actions.clone()
 
         # To know how long each foot has been in contact with the floor
