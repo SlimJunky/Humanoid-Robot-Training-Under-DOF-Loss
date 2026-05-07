@@ -26,6 +26,37 @@ LABEL_KEYWORDS = {
     "wave": ["wave", "waving", "slow wave", "reach", "reaching", "stretch", "stretching", "hand"],
 }
 
+def find_project_root() -> Path:
+    """Find the repository root from this script location."""
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+        if (parent / ".git").exists():
+            return parent
+
+    # Expected fallback if script is in: repo/scripts_amass/script_name.py
+    return current.parents[1]
+
+
+def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
+    """Resolve absolute paths directly, and relative paths from the project root."""
+    path = Path(path_value).expanduser()
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+
+def project_relative(path: Path, project_root: Path) -> str:
+    """Store paths relative to the project root where possible."""
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
 
 def guess_label(text: str) -> str | None:
     t = text.lower()
@@ -52,60 +83,59 @@ def safe_scalar(value: Any) -> Any:
         return value
 
 
-def inspect_npz(path: Path, input_dir: Path) -> dict[str, Any]:
-    data = np.load(path, allow_pickle=True)
-    rel_path = path.relative_to(input_dir)
+def inspect_npz(path: Path, input_dir: Path, project_root: Path) -> dict[str, Any]:
+    with np.load(path, allow_pickle=True) as data:
+        rel_path = path.relative_to(input_dir)
+        keys = list(data.keys())
 
-    keys = list(data.keys())
+        row: dict[str, Any] = {
+            "file": project_relative(path, project_root),
+            "relative_file": rel_path.as_posix(),
+            "clip_name": rel_path.stem,
+            "file_stem": path.stem,
+            "parent_folder": path.parent.name,
+            "subject_folder": rel_path.parts[0] if len(rel_path.parts) > 0 else None,
+            "label_guess": guess_label(rel_path.as_posix()),
+            "keys": keys,
+        }
 
-    row: dict[str, Any] = {
-        "file": str(path),
-        "relative_file": rel_path.as_posix(),
-        "clip_name": rel_path.stem,
-        "file_stem": path.stem,
-        "parent_folder": path.parent.name,
-        "subject_folder": rel_path.parts[0] if len(rel_path.parts) > 0 else None,
-        "label_guess": guess_label(rel_path.as_posix()),
-        "keys": keys,
-    }
+        for key in ["poses", "trans", "betas", "dmpls"]:
+            if key in data:
+                row[f"{key}_shape"] = to_shape(data[key])
 
-    for key in ["poses", "trans", "betas", "dmpls"]:
-        if key in data:
-            row[f"{key}_shape"] = to_shape(data[key])
-
-    if "mocap_framerate" in data:
-        try:
-            row["fps"] = float(safe_scalar(data["mocap_framerate"]))
-        except Exception:
+        if "mocap_framerate" in data:
+            try:
+                row["fps"] = float(safe_scalar(data["mocap_framerate"]))
+            except Exception:
+                row["fps"] = None
+        else:
             row["fps"] = None
-    else:
-        row["fps"] = None
 
-    if "gender" in data:
-        try:
-            row["gender"] = str(safe_scalar(data["gender"]))
-        except Exception:
+        if "gender" in data:
+            try:
+                row["gender"] = str(safe_scalar(data["gender"]))
+            except Exception:
+                row["gender"] = None
+        else:
             row["gender"] = None
-    else:
-        row["gender"] = None
 
-    if "trans" in data:
-        row["num_frames"] = int(np.asarray(data["trans"]).shape[0])
-    elif "poses" in data:
-        row["num_frames"] = int(np.asarray(data["poses"]).shape[0])
-    else:
-        row["num_frames"] = None
+        if "trans" in data:
+            row["num_frames"] = int(np.asarray(data["trans"]).shape[0])
+        elif "poses" in data:
+            row["num_frames"] = int(np.asarray(data["poses"]).shape[0])
+        else:
+            row["num_frames"] = None
 
-    if row["num_frames"] is not None and row["fps"]:
-        row["duration_s"] = row["num_frames"] / row["fps"]
-    else:
-        row["duration_s"] = None
+        if row["num_frames"] is not None and row["fps"]:
+            row["duration_s"] = row["num_frames"] / row["fps"]
+        else:
+            row["duration_s"] = None
 
-    if "poses" in data:
-        pose_shape = np.asarray(data["poses"]).shape
-        if len(pose_shape) == 2 and pose_shape[1] >= 3:
-            row["root_orient_dims"] = 3
-            row["body_pose_dims"] = int(pose_shape[1] - 3)
+        if "poses" in data:
+            pose_shape = np.asarray(data["poses"]).shape
+            if len(pose_shape) == 2 and pose_shape[1] >= 3:
+                row["root_orient_dims"] = 3
+                row["body_pose_dims"] = int(pose_shape[1] - 3)
 
     return row
 
@@ -185,9 +215,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir)
-    output_json = Path(args.output_json)
-    output_csv = Path(args.output_csv)
+    project_root = find_project_root()
+
+    input_dir = resolve_project_path(args.input_dir, project_root)
+    output_json = resolve_project_path(args.output_json, project_root)
+    output_csv = resolve_project_path(args.output_csv, project_root)
+
+    if not input_dir.exists():
+        raise FileNotFoundError(f"Input directory not found: {input_dir}")
 
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -199,14 +234,14 @@ def main() -> None:
             continue
 
         try:
-            row = inspect_npz(npz_path, input_dir)
+            row = inspect_npz(npz_path, input_dir, project_root)
             if args.include_all or row["label_guess"] is not None:
                 rows.append(row)
         except Exception as exc:
             rel_path = npz_path.relative_to(input_dir)
             rows.append(
                 {
-                    "file": str(npz_path),
+                    "file": project_relative(npz_path, project_root),
                     "relative_file": rel_path.as_posix(),
                     "clip_name": rel_path.stem,
                     "parent_folder": npz_path.parent.name,
@@ -218,7 +253,9 @@ def main() -> None:
     label_counts = Counter(row.get("label_guess") or "unlabeled" for row in rows)
 
     summary = {
-        "input_dir": str(input_dir),
+         "input_dir": project_relative(input_dir, project_root),
+        "output_json": project_relative(output_json, project_root),
+        "output_csv": project_relative(output_csv, project_root),
         "num_entries": len(rows),
         "label_counts": dict(label_counts),
         "entries": rows,
@@ -227,8 +264,8 @@ def main() -> None:
     output_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     write_csv(rows, output_csv)
 
-    print(f"Wrote JSON manifest to: {output_json}")
-    print(f"Wrote CSV manifest to:  {output_csv}")
+    print(f"Wrote JSON manifest to: {project_relative(output_json, project_root)}")
+    print(f"Wrote CSV manifest to:  {project_relative(output_csv, project_root)}")
     print("Label counts:")
     for label, count in sorted(label_counts.items()):
         print(f"  {label}: {count}")

@@ -165,7 +165,21 @@ The output file will be saved to `outputs/g1_asset_dump.json` relative to the pr
 ```powershell
 python scripts/g1_dump_asset_info.py --out outputs/g1_asset_dump.json
 ```
-#### Prepare AMASS Motion for Retargeting
+
+
+## Inspect AMASS Motion Files and Generate Manifest
+
+This script scans a folder of AMASS `.npz` motion files and creates a JSON and CSV manifest. It records useful information such as file name, relative path, motion label guess, FPS, number of frames, duration, gender, and available AMASS keys.
+
+The manifests are useful for selecting candidate clips and understanding the format of the data before preparing them for retargeting onto the Unitree G1 robot. Mainly used for debugging not part of the pipeline required to run the experiment.
+
+### Run Command
+
+```powershell
+python scripts_amass/inspect_amass_cmu.py --input_dir data/selected_data/Walk --include_all
+```
+
+### Prepare AMASS Motion for Retargeting
 
 This script prepares a selected AMASS `.npz` motion file into a simpler retarget-ready format for later Unitree G1 mapping. It extracts the SMPL+H body pose, hand pose, root translation, root orientation, root quaternion, root yaw, betas, and timing information.
 
