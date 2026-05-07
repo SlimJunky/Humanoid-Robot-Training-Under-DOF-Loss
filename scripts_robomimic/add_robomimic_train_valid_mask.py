@@ -31,16 +31,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Add robomimic train/valid mask splits to an existing HDF5 demo dataset"
     )
-    parser.add_argument("dataset", help="Path to robomimic-style HDF5 dataset")
+    parser.add_argument("dataset", help="path to the to robomimic-style HDF5 dataset")
     parser.add_argument("--train-ratio", type=float, default=0.9, help="Train split ratio")
     parser.add_argument("--valid-ratio", type=float, default=0.1, help="Validation split ratio")
-    parser.add_argument("--seed", type=int, default=1, help="Shuffle seed")
+    parser.add_argument("--seed", type=int, default=1, help="shuffle seed")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing train/valid masks")
     args = parser.parse_args()
 
     total_ratio = args.train_ratio + args.valid_ratio
     if abs(total_ratio - 1.0) > 1e-8:
-        raise ValueError(f"train-ratio + valid-ratio must sum to 1.0, got {total_ratio}")
+        raise ValueError(f"train-ratio + valid-ratio must sum to 1.0: {total_ratio}")
 
     dataset_path = Path(args.dataset)
     if not dataset_path.exists():
@@ -48,11 +48,11 @@ def main() -> int:
 
     with h5py.File(dataset_path, "r+") as f:
         if "data" not in f:
-            raise KeyError("Expected top-level group 'data' in dataset")
+            raise KeyError("Expected top-level group data in dataset")
 
         data_group = f["data"]
         if not isinstance(data_group, h5py.Group):
-            raise TypeError("Expected '/data' to be an h5py Group")
+            raise TypeError("Expected /data to be h5py Group")
 
         demo_names = sorted(list(data_group.keys()))
         if not demo_names:

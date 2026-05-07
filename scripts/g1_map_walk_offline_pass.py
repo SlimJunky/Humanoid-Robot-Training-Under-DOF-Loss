@@ -168,7 +168,7 @@ def find_project_root() -> Path:
         if (parent / ".git").exists():
             return parent
 
-    # Expected fallback if script is in /scripts_amass/script_name.py
+    # Expected fallback if script is in /scripts/script_name.py
     return current.parents[1]
 
 

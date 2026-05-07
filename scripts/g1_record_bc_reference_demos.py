@@ -25,6 +25,35 @@ def as_json_str(obj: dict[str, Any]) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
+def find_project_root() -> Path:
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+        if (parent / ".git").exists():
+            return parent
+
+    # Expected fallback if script is in /scripts/script_name.py
+    return current.parents[1]
+
+
+def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
+    path = Path(path_value).expanduser()
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+
+def project_relative(path: Path, project_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def compute_joint_velocities(joint_targets: np.ndarray, fps: float) -> np.ndarray:
     '''finite-difference joint velocities for [T, J] joint targets.'''
     if joint_targets.ndim != 2:
@@ -231,8 +260,10 @@ def main():
 
     np.random.seed(args.seed)
 
-    mapped_path = Path(args.mapped_npz)
-    out_hdf5 = Path(args.out_hdf5)
+    project_root = find_project_root()
+
+    mapped_path = resolve_project_path(args.mapped_npz.strip(), project_root)
+    out_hdf5 = resolve_project_path(args.out_hdf5.strip(), project_root)
 
     if not mapped_path.exists():
         raise FileNotFoundError(f"Mapped motion not found: {mapped_path}")
@@ -297,7 +328,7 @@ def main():
             "act_dim": act_dim, # size of action vector
             "joint_names": joint_names,
             "teacher": "retargeted_reference_motion",
-            "source_mapped_npz": str(mapped_path.resolve()),
+            "source_mapped_npz": project_relative(mapped_path, project_root),
             "actions_normalized": not args.no_normalize_actions,
             "action_normalization": {
                 "method": "per_joint_soft_limit_affine_map" if not args.no_normalize_actions else "none",
@@ -306,8 +337,8 @@ def main():
             },
             "notes": (
                 "Reference-driven BC dataset generated from mapped G1 motion. "
-                "This is suitable as a custom robomimic-style low-dimensional dataset, "
-                "but a custom environment wrapper may still be needed during training."
+                "This is suitable as a custom robomimic-style low-dimensional dataset because of proprio obs key"
+                
             ),
         },
     }
@@ -322,13 +353,14 @@ def main():
 
     meta_path = out_hdf5.with_suffix(".json")
     meta = {
-        "output_hdf5": str(out_hdf5.resolve()),
+        "output_hdf5": project_relative(out_hdf5, project_root),
+        "output_json": project_relative(meta_path, project_root),
         "num_demos": args.num_demos,
         "obs_dim": obs_dim,
         "act_dim": act_dim,
         "fps": fps,
         "joint_names": joint_names,
-        "source_mapped_npz": str(mapped_path.resolve()),
+        "source_mapped_npz": project_relative(mapped_path, project_root),
         "include_phase": args.include_phase,
         "obs_noise_std": args.obs_noise_std,
         "action_noise_std": args.action_noise_std,
@@ -339,8 +371,8 @@ def main():
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
-    print(f"Saved HDF5 dataset : {out_hdf5}")
-    print(f"Saved metadata JSON : {meta_path}")
+    print(f"Saved HDF5 dataset : {project_relative(out_hdf5, project_root)}")
+    print(f"Saved metadata JSON: {project_relative(meta_path, project_root)}")
     print(f"Num demos          : {args.num_demos}")
     print(f"Obs dim            : {obs_dim}")
     print(f"Action dim         : {act_dim}")

@@ -210,19 +210,35 @@ This first-pass mapping is used before generating Behavioral Cloning demonstrati
 #### Run Command
 
 ```powershell
-python scripts_amass/map_motion_to_g1_first_pass.py data/retarget_ready/Walk/37_01_poses_slow_walk_retarget_ready.npz --g1-dump-json outputs/g1_asset_dump.json --out-dir data/mapped
+python scripts/g1_map_walk_offline_pass.py data/retarget_ready/Walk/37_01_poses_slow_walk_retarget_ready.npz --g1-dump-json outputs/g1_asset_dump.json --out-dir data/mapped
 ```
 
-### Play Mapped G1 Motion in Isaac Lab
+### Preview Mapped G1 Motion in Isaac Lab - g1_preview_mapped_motion.py
 
 This script launches a simple Isaac Lab scene, spawns the Unitree G1 robot using `G1_MINIMAL_CFG`, and plays back a mapped G1 joint-target `.npz` file. It is used to visually inspect the first-pass retargeted motion before using it for BC demos generated in another script before BC policy prior
 
 The script checks that the joint order in the mapped `.npz` file matches the current G1 articulation. It then sends each frame of `joint_targets` to the robot as position targets and steps the physics simulation.
 
-This is a physics-based playback script so I recommend running this with the below command enabling frozen root to visually see mapped leg movement.
+This is a physics-based playback script so I recommend running this with the below command enabling fixed root to visually see mapped leg movement.
 
 #### Run Command
 
 ```powershell
-python scripts_amass/play_mapped_g1_motion.py data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz --loop --reset-on-loop
+python scripts/g1_preview_mapped_motion.py data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz --root-height 0.95 --loop --fps 60
+```
+
+### Generate BC Reference Demonstrations - generate_bc_reference_demos.py
+
+This script creates a Robomimic-style HDF5 dataset from a mapped G1 joint-target `.npz` file. It randomizes the starting phase of the mapped walking motion to generate many BC demonstration episodes for training the behavioral cloning prior.
+
+The observations contain G1 joint positions, joint velocities, and optionally normalized phase. For this project, `--include-phase` should be used so the observation is `q(37) + qd(37) + phase(1) = 75`.
+
+The actions are next-frame G1 joint targets, normalized to `[-1, 1]` by default using the soft joint limits stored in the mapped `.npz`.
+
+Please include these arguments parameters to replicate the HDF5 BC demonstration episodes that were used in training the bc prior.
+
+#### Run Command
+
+```powershell
+python scripts/generate_bc_reference_demos.py data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz --out-hdf5 datasets/g1_walk_reference_bc_1024_regular.hdf5 --num-demos 1024 --include-phase --obs-noise-std 0.005 --action-noise-std 0.0 --speed-jitter 0.05 --seed 0
 ```
