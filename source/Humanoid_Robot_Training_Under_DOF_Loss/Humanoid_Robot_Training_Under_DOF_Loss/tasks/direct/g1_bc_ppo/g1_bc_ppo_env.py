@@ -68,10 +68,10 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
     bc_meta_json: str = (
         r"C:\MAIN PROJECT CODE\Humanoid_Robot_Training_Under_DOF_Loss"
-        r"\data\bc_dataset_demonstrations\g1_walk_reference_bc_1024_regular.json"
+        r"\bc_config_files\g1_bc_runtime_public.json"
     )
 
-    # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
+    # ----------------- Config weights ----------------------------------
 
     # control for Unitree G1 environment motion and spawn height standard usually constant
     residual_scale: float = 0.15
@@ -248,7 +248,7 @@ class G1BCPPOEnv(DirectRLEnv):
         cfg.robot_cfg.spawn.activate_contact_sensors = True
         super().__init__(cfg, render_mode, **kwargs)
 
-        # Load metadata
+        # Load meta data
         meta_path = Path(self.cfg.bc_meta_json)
         if not meta_path.exists():
             raise FileNotFoundError(f"BC metadata JSON not found: {meta_path}")
@@ -263,23 +263,39 @@ class G1BCPPOEnv(DirectRLEnv):
         self.action_low = torch.tensor(meta["action_low"], dtype=torch.float32, device=self.device)
         self.action_high = torch.tensor(meta["action_high"], dtype=torch.float32, device=self.device)
 
-        source_npz = Path(meta["source_mapped_npz"])
-        if not source_npz.exists():
-            raise FileNotFoundError(f"Mapped reference npz not found: {source_npz}")
+        source_npz_value = meta.get("source_mapped_npz", "")
+        source_npz = Path(source_npz_value) if source_npz_value else None
 
-        with np.load(source_npz, allow_pickle=True) as data:
-            reference_q_np = np.asarray(data["joint_targets"], dtype=np.float32)
+        if source_npz is not None and source_npz.exists():
+            with np.load(source_npz, allow_pickle=True) as data:
+                reference_q_np = np.asarray(data["joint_targets"], dtype=np.float32)
 
-        self.reference_q = torch.tensor(reference_q_np, dtype=torch.float32, device=self.device)
-        self.num_ref_frames = self.reference_q.shape[0]
+            self.reference_q = torch.tensor(reference_q_np, dtype=torch.float32, device=self.device)
+            self.num_ref_frames = self.reference_q.shape[0]
 
-        # Finite-difference reference velocity.
-        dt_ref = 1.0 / float(meta.get("fps", 60.0))
-        ref_qd_np = np.zeros_like(reference_q_np, dtype=np.float32)
-        ref_qd_np[1:-1] = (reference_q_np[2:] - reference_q_np[:-2]) / (2.0 * dt_ref)
-        ref_qd_np[0] = (reference_q_np[1] - reference_q_np[0]) / dt_ref
-        ref_qd_np[-1] = (reference_q_np[-1] - reference_q_np[-2]) / dt_ref
-        self.reference_qd = torch.tensor(ref_qd_np, dtype=torch.float32, device=self.device)
+            dt_ref = 1.0 / float(meta.get("fps", 60.0))
+            ref_qd_np = np.zeros_like(reference_q_np, dtype=np.float32)
+            ref_qd_np[1:-1] = (reference_q_np[2:] - reference_q_np[:-2]) / (2.0 * dt_ref)
+            ref_qd_np[0] = (reference_q_np[1] - reference_q_np[0]) / dt_ref
+            ref_qd_np[-1] = (reference_q_np[-1] - reference_q_np[-2]) / dt_ref
+
+            self.reference_qd = torch.tensor(ref_qd_np, dtype=torch.float32, device=self.device)
+
+            print(f"[INFO] Loaded mapped reference motion: {source_npz}")
+            print(f"[INFO] Reference frames: {self.num_ref_frames}")
+
+        else:
+            print("[WARN] No mapped reference .npz found.")
+            print("[WARN] Falling back to default G1 joint pose as a single-frame reference.")
+            print("[WARN] This is suitable for playback/evaluation, but not exact original training reproduction.")
+
+        default_q = self.robot.data.default_joint_pos[0].detach().clone()
+        self.reference_q = default_q.unsqueeze(0).to(self.device)
+        self.reference_qd = torch.zeros_like(self.reference_q)
+        self.num_ref_frames = 1
+
+
+
 
         # Load BC teacher policy as pre-trained foundation. PPO learns balance foundations around BC walking prior
         policy_path = Path(self.cfg.bc_policy_path)
