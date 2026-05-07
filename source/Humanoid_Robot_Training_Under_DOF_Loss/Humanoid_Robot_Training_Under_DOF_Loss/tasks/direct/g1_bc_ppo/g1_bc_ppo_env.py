@@ -25,6 +25,44 @@ from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from isaaclab_assets import G1_MINIMAL_CFG
 
 
+def _find_project_root() -> Path:
+    """Find the repository root from this file location."""
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+    # repo/source/ExtensionName/PackageName/tasks/direct/g1_bc_ppo/g1_bc_ppo_env.py is expected
+    return current.parents[6]
+
+def _resolve_path(path_value: str | Path, project_root: Path) -> Path:
+    """Resolve absolute paths directly, and relative paths from the project root."""
+    path = Path(path_value)
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+def _find_first_pass_files(mapped_walk_dir: Path) -> tuple[Path | None, Path | None]:
+    """ The .json is discovered for logging/documentation, but the environment only needs the .npz if it contains joint_targets."""
+    if not mapped_walk_dir.exists():
+        return None, None
+
+    npz_matches = sorted(mapped_walk_dir.glob("*first_pass*.npz"))
+    if not npz_matches:
+        npz_matches = sorted(mapped_walk_dir.glob("*.npz"))
+
+    json_matches = sorted(mapped_walk_dir.glob("*first_pass*.json"))
+    if not json_matches:
+        json_matches = sorted(mapped_walk_dir.glob("*.json"))
+
+    source_npz = npz_matches[0] if npz_matches else None
+    source_json = json_matches[0] if json_matches else None
+
+    return source_npz, source_json
+
+
 @configclass
 class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # env
@@ -55,21 +93,23 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
         clone_in_fabric=False,
     )
 
-    # robot
+    # Robot spawn config
     robot_cfg: ArticulationCfg = G1_MINIMAL_CFG.replace(prim_path="/World/envs/env_.*/Robot")
     # Required for ContactSensor to work on G1 links
     robot_cfg.spawn.activate_contact_sensors = True
 
-    # files, change these to match external project location of the base path
-    bc_policy_path: str = (
-        r"C:\MAIN PROJECT CODE\Humanoid_Robot_Training_Under_DOF_Loss"
-        r"\bc_walking_policy_checkpoints\g1_bc_walk\g1_model_epoch_81_best.pt"
-    )
 
-    bc_meta_json: str = (
-        r"C:\MAIN PROJECT CODE\Humanoid_Robot_Training_Under_DOF_Loss"
-        r"\bc_config_files\g1_bc_runtime_public.json"
-    )
+    # File locations default
+    bc_policy_path: str = r"bc_walking_policy_checkpoints\g1_bc_walk\g1_model_epoch_81_best.pt"
+    bc_meta_json: str = r"bc_config_files\g1_bc_runtime_public.json"
+
+    # Folder searched automatically for mapped first-pass motion files.
+    mapped_walk_dir: str = r"data\mapped\Walk" 
+
+    # Hard code for if .npz is required. Should be to match training as it was done
+    require_reference_motion: bool = True
+
+
 
     # ----------------- Config weights ----------------------------------
 
@@ -248,12 +288,19 @@ class G1BCPPOEnv(DirectRLEnv):
         cfg.robot_cfg.spawn.activate_contact_sensors = True
         super().__init__(cfg, render_mode, **kwargs)
 
-        # Load meta data
-        meta_path = Path(self.cfg.bc_meta_json)
+        
+        self.project_root = _find_project_root()
+
+        meta_path = _resolve_path(self.cfg.bc_meta_json, self.project_root)
+
         if not meta_path.exists():
-            raise FileNotFoundError(f"BC metadata JSON not found: {meta_path}")
+            raise FileNotFoundError(
+                f"BC metadata JSON not found: {meta_path}\n"
+                "Expected a runtime metadata JSON containing joint_names, action_low, action_high and fps."
+            )
 
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        print(f"[INFO] Loaded BC runtime metadata: {meta_path}")
 
         self.joint_names_file = meta["joint_names"]
 
@@ -263,42 +310,81 @@ class G1BCPPOEnv(DirectRLEnv):
         self.action_low = torch.tensor(meta["action_low"], dtype=torch.float32, device=self.device)
         self.action_high = torch.tensor(meta["action_high"], dtype=torch.float32, device=self.device)
 
-        source_npz_value = meta.get("source_mapped_npz", "")
-        source_npz = Path(source_npz_value) if source_npz_value else None
+        # Discover mapped reference motion by itself
+
+        mapped_walk_dir = _resolve_path(self.cfg.mapped_walk_dir, self.project_root)
+        auto_npz, auto_json = _find_first_pass_files(mapped_walk_dir)
+
+        if auto_json is not None:
+            print(f"[INFO] Found mapped sidecar JSON: {auto_json}")
+
+        source_npz = None
+
+        meta_npz_value = meta.get("source_mapped_npz", "")
+        if meta_npz_value:
+            candidate_npz = _resolve_path(meta_npz_value, self.project_root)
+            if candidate_npz.exists():
+                source_npz = candidate_npz
+            else:
+                print(f"[WARN] Metadata source_mapped_npz does not exist: {candidate_npz}")
+
+        if source_npz is None:
+            source_npz = auto_npz
+
+            if source_npz is not None:
+                print(f"[INFO] Using auto-discovered mapped reference NPZ: {source_npz}")
 
         if source_npz is not None and source_npz.exists():
             with np.load(source_npz, allow_pickle=True) as data:
+                if "joint_targets" not in data:
+                    raise KeyError(
+                        f"Mapped reference NPZ does not contain 'joint_targets': {source_npz}"
+                    )
+
                 reference_q_np = np.asarray(data["joint_targets"], dtype=np.float32)
+
+            if reference_q_np.ndim != 2 or reference_q_np.shape[1] != self.cfg.action_space:
+                raise RuntimeError(
+                    f"Expected reference joint_targets shape [T, {self.cfg.action_space}], "
+                    f"got {reference_q_np.shape} from {source_npz}"
+                )       
 
             self.reference_q = torch.tensor(reference_q_np, dtype=torch.float32, device=self.device)
             self.num_ref_frames = self.reference_q.shape[0]
 
             dt_ref = 1.0 / float(meta.get("fps", 60.0))
             ref_qd_np = np.zeros_like(reference_q_np, dtype=np.float32)
-            ref_qd_np[1:-1] = (reference_q_np[2:] - reference_q_np[:-2]) / (2.0 * dt_ref)
-            ref_qd_np[0] = (reference_q_np[1] - reference_q_np[0]) / dt_ref
-            ref_qd_np[-1] = (reference_q_np[-1] - reference_q_np[-2]) / dt_ref
+
+            if reference_q_np.shape[0] > 1:
+                ref_qd_np[1:-1] = (reference_q_np[2:] - reference_q_np[:-2]) / (2.0 * dt_ref)
+                ref_qd_np[0] = (reference_q_np[1] - reference_q_np[0]) / dt_ref
+                ref_qd_np[-1] = (reference_q_np[-1] - reference_q_np[-2]) / dt_ref
 
             self.reference_qd = torch.tensor(ref_qd_np, dtype=torch.float32, device=self.device)
 
-            print(f"[INFO] Loaded mapped reference motion: {source_npz}")
+            print(f"[INFO] Loaded mapped reference NPZ: {source_npz}")
             print(f"[INFO] Reference frames: {self.num_ref_frames}")
 
         else:
+            if self.cfg.require_reference_motion:
+                raise FileNotFoundError(
+                f"No mapped reference .npz found.\n"
+                f"Searched folder: {mapped_walk_dir}\n"
+                "Expected a file like '*first_pass*.npz' or any '.npz' containing 'joint_targets'."
+            )
+
             print("[WARN] No mapped reference .npz found.")
             print("[WARN] Falling back to default G1 joint pose as a single-frame reference.")
-            print("[WARN] This is suitable for playback/evaluation, but not exact original training reproduction.")
+            print("[WARN] Playback/evaluation can run, but exact reference-tracking training is not reproduced.")
 
-        default_q = self.robot.data.default_joint_pos[0].detach().clone()
-        self.reference_q = default_q.unsqueeze(0).to(self.device)
-        self.reference_qd = torch.zeros_like(self.reference_q)
-        self.num_ref_frames = 1
-
-
+            default_q = self.robot.data.default_joint_pos[0].detach().clone()
+            self.reference_q = default_q.unsqueeze(0).to(self.device)
+            self.reference_qd = torch.zeros_like(self.reference_q)
+            self.num_ref_frames = 1
 
 
         # Load BC teacher policy as pre-trained foundation. PPO learns balance foundations around BC walking prior
-        policy_path = Path(self.cfg.bc_policy_path)
+        policy_path = _resolve_path(self.cfg.bc_policy_path, self.project_root)
         if not policy_path.exists():
             raise FileNotFoundError(f"BC TorchScript policy not found: {policy_path}")
 
