@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 ''' Small script to edit existing HDF5 bc demonstrations data set and add expected ratio of train and valid masks for robo-mimic to use'''
 
 import argparse

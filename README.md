@@ -156,13 +156,33 @@ Some examples of packages that can likely be excluded are:
 
 This script launches a minimal Isaac Lab scene, spawns the Unitree G1 robot using `G1_MINIMAL_CFG`, and exports useful robot asset information such as joint names, body names, default joint positions, velocity values, and joint limits.
 
-The script is useful for checking the exact G1 joint order used by Isaac Lab before retargeting, imitation learning, or reinforcement learning.
+The script is useful for checking the exact G1 joint order used by Isaac Lab before retargeting any motion capture data.
 
 The output file will be saved to `outputs/g1_asset_dump.json` relative to the project root.
 
-### Run Command
+#### Run Command
 
 ```powershell
 python scripts/g1_dump_asset_info.py --out outputs/g1_asset_dump.json
 ```
+#### Prepare AMASS Motion for Retargeting
+
+This script prepares a selected AMASS `.npz` motion file into a simpler retarget-ready format for later Unitree G1 mapping. It extracts the SMPL+H body pose, hand pose, root translation, root orientation, root quaternion, root yaw, betas, and timing information.
+
+The script also resamples the motion to a target FPS, specifically 60FPS and optionally normalises the root X/Y translation so the motion starts from zero. The generated output is used as the intermediate motion file before creating the first-pass G1 mapped joint targets.
+
+Below is an example of how this command was originally run with an expected location and default name within project repository as "data/selected_data/Walk/37_01_poses_slow_walk_retarget_ready.npz".
+
+By default, the script normalizes the root X/Y translation so the motion starts at the origin, while keeping the original vertical root height. This makes the motion easier to use later for retargeting and playback in Isaac Lab.
+
+The script generates a "retarget-ready" .npz file and a "metadata" .json file in the expected out-directory
+
+Please make sure to obtain the right pose data 37_01_poses as SMPL+H from the AMASS version of the CMU MoCap Dataset.
+
+#### Run Command
+
+```powershell
+python scripts_amass/amass_retarget_preparation.py data/selected_data/Walk/37_01_poses_slow_walk.npz --out-dir data/retarget_ready --target-fps 60
+```
+
 

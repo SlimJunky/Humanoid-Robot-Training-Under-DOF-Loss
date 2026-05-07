@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 import argparse
 import json
 from dataclasses import dataclass
@@ -74,6 +77,38 @@ G1_TEMPLATE_JOINTS_37 = [
     "left_two_joint", "right_two_joint",
 ]
 
+def find_project_root() -> Path:
+    """Find the repository root from this script location"""
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+        if (parent / ".git").exists():
+            return parent
+
+    # Expected fallback if script is in: repo/scripts_amass/script_name.py
+    return current.parents[1]
+
+
+def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
+    """Resolve absolute paths directly, and relative paths from the project root"""
+    path = Path(path_value).expanduser()
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+
+def project_relative(path: Path, project_root: Path) -> str:
+    """Store paths relative to the project root where possible"""
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 
 @dataclass
 class RetargetPrep:
@@ -95,6 +130,8 @@ def sanitize(value: Any) -> Any:
         return [sanitize(v) for v in value]
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
+    if isinstance(value, Path):
+        return str(value)
     if isinstance(value, np.ndarray):
         return sanitize(value.tolist())
     if isinstance(value, np.generic):
@@ -201,7 +238,11 @@ def prepare_retarget_ready(
     mirror_category: bool,
     normalize_root_xy: bool,
     keep_vertical_root: bool,
+    project_root: Path | None = None,
 ) -> RetargetPrep:
+    project_root = project_root or find_project_root()
+    npz_path = resolve_project_path(npz_path, project_root)
+    out_dir = resolve_project_path(out_dir, project_root)
     with np.load(npz_path, allow_pickle=True) as raw:
         source = {key: raw[key] for key in raw.files}
 
@@ -327,7 +368,7 @@ def prepare_retarget_ready(
 
     metadata = {
         "source": {
-            "absolute_path": str(npz_path.resolve()),
+            "project_path": project_relative(npz_path, project_root),
             "file_name": npz_path.name,
             "category": category,
         },
@@ -338,8 +379,8 @@ def prepare_retarget_ready(
             "source_duration_s": duration_s,
         },
         "output": {
-            "npz_path": str(out_npz.resolve()),
-            "json_path": str(out_json.resolve()),
+            "npz_path": project_relative(out_npz, project_root),
+            "json_path": project_relative(out_json, project_root),
             "target_fps": out_fps,
             "num_frames": num_frames,
             "duration_s": float((num_frames - 1) / out_fps) if num_frames > 1 else 0.0,
@@ -422,8 +463,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    npz_path = Path(args.npz_path.strip())
-    out_dir = Path(args.out_dir.strip())
+    project_root = find_project_root()
+    npz_path = resolve_project_path(args.npz_path.strip(), project_root)
+    out_dir = resolve_project_path(args.out_dir.strip(), project_root)
 
     if not npz_path.exists():
         raise FileNotFoundError(f"Input file not found: {npz_path}")
@@ -439,10 +481,11 @@ def main() -> int:
         mirror_category=True,
         normalize_root_xy=not args.keep_root_global,
         keep_vertical_root=not args.flatten_root_z,
+        project_root=project_root,
     )
 
-    print(f"Retarget-ready NPZ : {result.output_npz}")
-    print(f"Retarget-ready JSON: {result.output_json}")
+    print(f"Retarget-ready NPZ : {project_relative(result.output_npz, project_root)}")
+    print(f"Retarget-ready JSON: {project_relative(result.output_json, project_root)}")
     print(f"Frames             : {result.metadata['output']['num_frames']}")
     print(f"Output FPS         : {result.metadata['output']['target_fps']}")
     return 0
