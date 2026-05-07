@@ -13,7 +13,36 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import os
+
+
+def find_project_root() -> Path:
+
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+        if (parent / ".git").exists():
+            return parent
+
+    # Expected fallback if script is in /scripts_robomimic/script_name.py
+    return current.parents[1]
+
+
+def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
+    path = Path(path_value).expanduser()
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+
+def project_relative(path: Path, project_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def write_mask_dataset(mask_group: h5py.Group, key: str, names: list[str], overwrite: bool) -> None:
@@ -27,7 +56,7 @@ def write_mask_dataset(mask_group: h5py.Group, key: str, names: list[str], overw
 
 
 def main() -> int:
-    # Parser arguments
+
     parser = argparse.ArgumentParser(
         description="Add robomimic train/valid mask splits to an existing HDF5 demo dataset"
     )
@@ -37,6 +66,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1, help="shuffle seed")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing train/valid masks")
     args = parser.parse_args()
+
+    project_root = find_project_root()
+    dataset_path = resolve_project_path(args.dataset.strip(), project_root)
 
     total_ratio = args.train_ratio + args.valid_ratio
     if abs(total_ratio - 1.0) > 1e-8:
@@ -71,7 +103,7 @@ def main() -> int:
 
         if len(train_names) == 0 or len(valid_names) == 0:
             raise ValueError(
-                f"Split produced empty subset: train={len(train_names)} valid={len(valid_names)}. "
+                f"split produced empty subset: train={len(train_names)} valid={len(valid_names)}. "
                 f"Adjust ratios or dataset size."
             )
 

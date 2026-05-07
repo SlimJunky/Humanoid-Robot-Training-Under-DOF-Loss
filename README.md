@@ -235,10 +235,77 @@ The observations contain G1 joint positions, joint velocities, and optionally no
 
 The actions are next-frame G1 joint targets, normalized to `[-1, 1]` by default using the soft joint limits stored in the mapped `.npz`.
 
-Please include these arguments parameters to replicate the HDF5 BC demonstration episodes that were used in training the bc prior.
+Please include these parameters to replicate the HDF5 BC demonstration episodes that were used in training the bc prior:
 
 #### Run Command
 
 ```powershell
-python scripts/generate_bc_reference_demos.py data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz --out-hdf5 datasets/g1_walk_reference_bc_1024_regular.hdf5 --num-demos 1024 --include-phase --obs-noise-std 0.005 --action-noise-std 0.0 --speed-jitter 0.05 --seed 0
+python scripts/g1_record_bc_reference_demos.py data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz --out-hdf5 data/bc_dataset_demonstrations/g1_walk_reference_bc_1024_regular.hdf5 --num-demos 1024 --include-phase --obs-noise-std 0.005 --action-noise-std 0.0 --speed-jitter 0.05 --seed 0
+```
+
+### Add Robomimic Train/Validation Masks - add_robomimic_train_valid_mask.py
+
+This script edits an existing Robomimic-style `.hdf5` dataset and adds the expected train and validation masks under the `/mask` group. These masks tell Robomimic which demonstration episodes should be used for training and which should be used for validation.
+
+For this project, the dataset was split using a `0.9` train ratio and `0.1` validation ratio. The script updates the HDF5 file in place and does not create a new dataset.
+
+This script was made to fix an oversight I missed before doing BC imitation learning using robomimic
+
+##### Run Command
+
+```powershell
+python scripts_robomimic/add_robomimic_train_valid_mask.py data/bc_dataset_demonstrations/g1_walk_reference_bc_1024_regular.hdf5 --train-ratio 0.9 --valid-ratio 0.1 --seed 1 --overwrite
+```
+
+### Train Behavioral Cloning Policy with Robomimic - train.py [robomimic cloned repo]
+
+This step trains the weak Behavioral Cloning policy used later as the prior for PPO. The Robomimic config file I used is an edited version based off the default provided by the robo-mimic repository. These are available here:
+
+The config file structure and documentation used for this project is provided in: https://robomimic.github.io/docs/modules/configs.html
+
+The default bc configuration file is normally inside the official robo-mimic repository 
+
+```text
+robomimic/exps/templates/bc.json
+```
+This can also be generated as a fresh default BC config JSON as such in bash:
+
+```bash
+python -c "from robomimic.config import config_factory; c = config_factory(algo_name='bc'); c.dump(filename='bc_default.json')"
+```
+
+I provide the correctly edited configuration file used for imitation learning training within this repository, but it is expected you move this file to the robomimic environment within Linux / WSL in your own file and change the path to match your project root:
+
+```text
+bc_config_files/g1_bc_walk.json
+```
+
+This script points to the generated G1 walking HDF5 dataset, uses the `train` and `valid` masks, and trains a low-dimensional BC policy from proprioceptive observations.
+
+Please only change the config file "g1_bc_walk.json" to point at the name of your generated BC demonstrations HDF5 file within the "train" section of the JSON and your appropriate output directory.
+
+For this project, the observation input was `q(37) + qd(37) + phase(1) = 75`, and the action output was the next-frame G1 joint target with `37` action dimensions. Actions were already normalized to `[-1, 1]` during BC dataset generation.
+
+The model was trained in the separate Robomimic/WSL environment, not directly inside Isaac Lab. The resulting checkpoint was later exported to TorchScript and used as the BC prior inside the Isaac Lab PPO environment.
+
+This is an unnecessary step since I provide the TorchScript Policy to recreate the experiment. However this is required if you wish to recreate the BC prior training shown briefly in the study.
+
+#### Run Command
+
+```bash
+python robomimic/scripts/train.py --config <PATH_TO_REPO>/bc_config_files/g1_bc_walk.json --debug
+```
+
+### Export Robomimic BC Policy to TorchScript - export_bc_policy_torchscript.py
+
+This script exports a trained Robomimic Behavioral Cloning `.pth` checkpoint into a standalone TorchScript `.pt` policy. The exported policy takes a 75-dimensional proprioceptive observation, `q(37) + qd(37) + phase(1)`, and outputs a normalized 37-dimensional G1 joint action.
+
+This is used to move the trained BC prior from the Robomimic/WSL environment into the Isaac Lab PPO environment without requiring Robomimic to be installed inside Isaac Lab. This is because Robo-mimic for windows tends to fail without weird environment wrappers.
+
+The output `.pt` path is provided manually as the second command argument. The final BC prior is used as described in the study. This is "epoch 81" which had the lowest validation loss and best training results viewed in TensorBoard.
+
+#### Run Command
+
+```bash
+python scripts_robomimic/export_bc_policy_torchscript.py bc_walking_policy_checkpoints/g1_bc_walk/models/model_epoch_81_best.pth bc_walking_policy_checkpoints/g1_bc_walk/g1_model_epoch_81_best.pt --device cuda --obs-dim 75
 ```

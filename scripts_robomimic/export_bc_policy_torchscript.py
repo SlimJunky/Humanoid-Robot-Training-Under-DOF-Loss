@@ -8,7 +8,7 @@ Output: action: [B, 37] into normalized action. All BC trained on normalized act
 This exported .pt can then be loaded from the Windows Isaac Lab G1 playback script without needing robomimic installed in the Windows Isaac Lab environment.
 """
 
-'''Warning, this will not work unless you are in described robomimic environment'''
+'''Warning, this will not work unless you are in the described robomimic environment within Linux or WSL'''
 
 import argparse
 from pathlib import Path
@@ -18,7 +18,7 @@ import robomimic.utils.file_utils as FileUtils
 
 
 class ProprioPolicyWrapper(torch.nn.Module):
-    """ Wrap the underlying robomimic torch policy network so it accepts a plain tensor: obs_vec: [B, 75]
+    """ wrap the underlying robomimic torch policy network so it accepts a plain tensor: obs_vec: [B, 75]
     and internally converts it into the robomimic observation dict: {"proprio": obs_vec} returning: action: [B, 37]
     """
 
@@ -32,7 +32,7 @@ class ProprioPolicyWrapper(torch.nn.Module):
     def forward(self, obs_vec: torch.Tensor) -> torch.Tensor:
         obs = {"proprio": obs_vec}
 
-        # robomimic ActorNetwork expects obs_dict and optional goal_dict.
+        # robomimic ActorNetwork expects obs_dict and optional goal_dict for some reasojn.
         out = self.policy_net(obs_dict=obs, goal_dict=None)
 
         # Different return policy styles
@@ -58,20 +58,20 @@ def main() -> int:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"[INFO] Loading robomimic checkpoint: {ckpt_path}")
+    print(f"loading robomimic checkpoint: {ckpt_path}")
 
     rollout_policy, ckpt_dict = FileUtils.policy_from_checkpoint(
         ckpt_path=str(ckpt_path),
         device=args.device,
     )
 
-    print(f"[INFO] Loaded object type: {type(rollout_policy)}")
+    print(f" Loaded object type: {type(rollout_policy)}")
 
     # policy_from_checkpoint returns a RolloutPolicy.
     # The actual robomimic object is stored inside rollout_policy.policy. Took me ages to figure out
     algo = rollout_policy.policy
 
-    print(f"[INFO] Underlying algo type: {type(algo)}")
+    print(f"Underlying algo type: {type(algo)}")
 
     # Robomimic Algo objects use set_eval(), not eval().
     algo.set_eval()
@@ -81,17 +81,17 @@ def main() -> int:
 
     example = torch.zeros(1, args.obs_dim, dtype=torch.float32, device=args.device)
 
-    print(f"[INFO] Testing wrapped policy with input shape: {tuple(example.shape)}")
+    print(f"Testing wrapped policy with input shape: {tuple(example.shape)}")
 
     with torch.no_grad():
         test_out = wrapped(example)
 
     if not isinstance(test_out, torch.Tensor):
-        raise TypeError(f"Wrapped policy output is not a Tensor. Got: {type(test_out)}")
+        raise TypeError(f"Wrapped policy output is not a Tensor, Got: {type(test_out)}")
 
-    print(f"[INFO] Wrapped policy output shape: {tuple(test_out.shape)}")
+    print(f"wrapped policy output shape: {tuple(test_out.shape)}")
     print(
-        f"[INFO] Output stats: "
+        f"Output stats: "
         f"min={test_out.min().item():+.6f}, "
         f"max={test_out.max().item():+.6f}, "
         f"mean={test_out.mean().item():+.6f}"
@@ -109,14 +109,14 @@ def main() -> int:
     with torch.no_grad():
         traced_out = traced(example)
 
-    print(f"[INFO] Traced policy output shape: {tuple(traced_out.shape)}")
+    print(f"traced policy output shape: {tuple(traced_out.shape)}")
 
     if torch.isnan(traced_out).any():
         raise RuntimeError("Traced policy produced NaN.")
 
     traced.save(str(out_path))
 
-    print(f"[INFO] Saved TorchScript policy to: {out_path}")
+    print(f"saved TorchScript policy to: {out_path}")
     return 0
 
 
