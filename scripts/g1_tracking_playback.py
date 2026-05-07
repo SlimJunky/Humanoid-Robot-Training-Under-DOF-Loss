@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 import argparse
 import traceback # Debug check for sim startup
 from pathlib import Path
@@ -57,7 +60,7 @@ from isaaclab_assets import G1_MINIMAL_CFG
 
 
 def reset_robot(robot: Articulation, default_joint_pos_np: np.ndarray, root_x: float, root_y: float, root_z: float) -> None:
-    """Reset root and joint state into a clean starting pose."""
+    '''Reset root and joint state into a clean starting pose'''
     root_state = robot.data.default_root_state.clone()
     root_state[:, 0] = root_x
     root_state[:, 1] = root_y
@@ -83,7 +86,7 @@ def main():
         time_s_np = np.asarray(data["time_s"], dtype=np.float64) if "time_s" in data else None
         default_joint_pos_np = np.asarray(data["default_joint_pos"], dtype=np.float64)
     
-    print("[CHK] mapped path exists")
+    print("[CHECKED] mapped path exists")
 
 
     num_frames, num_joints = joint_targets_np.shape
@@ -133,13 +136,13 @@ def main():
     sim_dt = sim.get_physics_dt()
     sim_steps_per_frame = max(1, int(round((1.0 / playback_fps) / sim_dt)))
 
-    print(f"[INFO] Loaded mapped motion: {mapped_path}")
-    print(f"[INFO] Frames: {num_frames}")
-    print(f"[INFO] Joints: {num_joints}")
-    print(f"[INFO] Playback FPS: {playback_fps:.3f}")
-    print(f"[INFO] Sim dt: {sim_dt:.6f}")
-    print(f"[INFO] Sim steps per motion frame: {sim_steps_per_frame}")
-    print("[INFO] This is physics-based tracking, not a balance policy.")
+    print(f"Loaded mapped motion: {mapped_path}")
+    print(f"Frames: {num_frames}")
+    print(f"Joints: {num_joints}")
+    print(f"Playback FPS: {playback_fps:.3f}")
+    print(f"Sim dt: {sim_dt:.6f}")
+    print(f"Sim steps per motion frame: {sim_steps_per_frame}")
+    print("[This is physics-based tracking, not a balance policy.")
 
     frame_idx = 0
     step_count = 0

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 '''Behavioral Cloning needs a bc reference demos script which generates many demo episodes for behavioral cloning by randomizing start phase of mapped motion clip. 
 Applies random small speed jitters and optionally adding observation / action noise.
 Also for Robomimic or Isaac Lab Mimic tools it writes this in a HDf5 style and a JSON summary. Script uses retargeted reference motions as the teacher.
@@ -23,7 +26,7 @@ def as_json_str(obj: dict[str, Any]) -> str:
 
 
 def compute_joint_velocities(joint_targets: np.ndarray, fps: float) -> np.ndarray:
-    '''Finite-difference joint velocities for [T, J] joint targets.'''
+    '''finite-difference joint velocities for [T, J] joint targets.'''
     if joint_targets.ndim != 2:
         raise ValueError(f"Expected joint_targets shape [T, J], got {joint_targets.shape}")
     dt = 1.0 / fps
@@ -54,13 +57,13 @@ def build_obs(
 def normalize_actions(actions: np.ndarray, action_lo: np.ndarray, action_hi: np.ndarray) -> np.ndarray:
     '''Map raw joint targets to [-1, 1] using per-dimension limits. This is required for robomimic so made this function and its denormalizing'''
     denom = action_hi - action_lo
-    # Avoid divide-by-zero if any range is degenerate
+    #avoid divide-by-zero if any range is degenerate
     denom = np.where(np.abs(denom) < 1e-8, 1.0, denom)
     normed = 2.0 * (actions - action_lo[None, :]) / denom[None, :] - 1.0
     return np.clip(normed, -1.0, 1.0).astype(np.float32)
 
 def denormalize_actions(actions_norm: np.ndarray, action_lo: np.ndarray, action_hi: np.ndarray) -> np.ndarray:
-    '''Map normalized [-1, 1] actions back to raw joint targets.'''
+    '''map normalized [-1, 1] actions back to raw joint targets'''
     return (((actions_norm + 1.0) * 0.5) * (action_hi - action_lo)[None, :] + action_lo[None, :]).astype(np.float32)
 
 '''what generates my one demonstration episode from mapped reference motion. This forces BC teacher as taken from Isaac Sim docs to be:
@@ -79,17 +82,14 @@ def make_rollout(
     include_phase: bool = True,
     normalize_action_targets: bool = True,
 ) -> dict[str, np.ndarray]:
-    '''Generate one reference-driven demonstration rollout from mapped joint targets.
-    This treats the mapped motion as the teacher. The actions are the next desired joint
-    targets and the observations are low-dimensional proprioception-like vectors.'''
     T, J = joint_targets.shape
     if T < 2:
         raise ValueError("Need at least 2 frames to generate a demo rollout.")
 
-    # Circularly shift starting phase. This means each demo can start at different point in walk cycle for better reference motion training
+    # Circularly shift starting phase This means each demo can start at different point in walk cycle for better reference motion training
     q_seq = np.roll(joint_targets, -start_idx, axis=0).astype(np.float32)
 
-    # Optional playback speed scaling by resampling in normalized time
+    #ptional playback speed scaling by resampling in normalized time
     if not np.isclose(speed_scale, 1.0):
         src_t = np.arange(T, dtype=np.float64)
         dst_t = np.arange(T, dtype=np.float64) * speed_scale
@@ -185,7 +185,6 @@ def main():
         default="datasets/g1_walk_reference_bc.hdf5",
         help="Output HDF5 path for robomimic-style demos.",
     )
-    # Number of reference demos generated
     parser.add_argument(
         "--num-demos",
         type=int,
@@ -284,7 +283,7 @@ def main():
     obs_dim = demos[0]["obs"].shape[1]
     act_dim = demos[0]["actions"].shape[1]
 
-    '''Metadata stored in HDF5 so training & evaluation code knows what environment dataset belongs to. Robomimics environment metadata requirements'''
+    '''metadata stored in HDF5 so training & evaluation code knows what environment dataset belongs to. Robomimics environment metadata requirements'''
     env_args = {
         "env_name": "IsaacLabG1ReferenceBC", #Environment ID
         "env_type": 2,

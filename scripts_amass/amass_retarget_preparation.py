@@ -109,7 +109,6 @@ def project_relative(path: Path, project_root: Path) -> str:
         return path.as_posix()
 
 
-
 @dataclass
 class RetargetPrep:
     source_path: Path
@@ -152,7 +151,7 @@ def maybe_scalar(arr_or_value: Any) -> Any:
 def derive_category(npz_path: Path) -> str:
     return npz_path.parent.name
 
-# Isaac sim & Isaac lab prefer quaternions just like other robotic simulation packages and environments.
+# Isaac sim & Isaac lab prefer quaternions just like other robotic simulation packages and environments so i do the conversion
 def axis_angle_to_quat(axis_angle: np.ndarray) -> np.ndarray:
     '''Convert Nx3 axis-angle to Nx4 quaternion (w, x, y, z).'''
     aa = np.asarray(axis_angle, dtype=np.float64)
@@ -421,7 +420,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Prepare an AMASS .npz motion file into a simpler retarget-ready intermediate package."
     )
-    parser.add_argument("npz_path", help="Path to the AMASS .npz file.")
+    parser.add_argument("npz_path", help="Path to the AMASS .npz file")
     parser.add_argument(
         "--out-dir",
         default="data/retarget_ready",
@@ -438,25 +437,25 @@ def parse_args() -> argparse.Namespace:
         "--trim-start-s",
         type=float,
         default=0.0,
-        help="Trim away this many seconds from the start before resampling.",
+        help="Trim away this many seconds from the start",
     )
     parser.add_argument(
         "--trim-end-s",
         type=float,
         default=None,
-        help="Optional end time in seconds. If omitted, keep until the end.",
+        help="Optional end time in seconds",
     )
-    # Do not normalize X/Y
+    # Do not normalize X/Y this is important 
     parser.add_argument(
         "--keep-root-global",
         action="store_true",
-        help="Keep the root translation in the original global frame instead of normalizing X/Y to start at zero.",
+        help="Keep the root translation in the original global frame instead of normalizing X/Y to start at zero",
     )
     #Subtract starting Z value 
     parser.add_argument(
         "--flatten-root-z",
         action="store_true",
-        help="Also normalize the vertical root position so Z starts at zero.",
+        help="Also normalize the vertical root position so Z starts at zero",
     )
     return parser.parse_args()
 
@@ -484,10 +483,10 @@ def main() -> int:
         project_root=project_root,
     )
 
-    print(f"Retarget-ready NPZ : {project_relative(result.output_npz, project_root)}")
-    print(f"Retarget-ready JSON: {project_relative(result.output_json, project_root)}")
-    print(f"Frames             : {result.metadata['output']['num_frames']}")
-    print(f"Output FPS         : {result.metadata['output']['target_fps']}")
+    print(f"retarget-ready NPZ : {project_relative(result.output_npz, project_root)}")
+    print(f"retarget-ready JSON: {project_relative(result.output_json, project_root)}")
+    print(f"frames             : {result.metadata['output']['num_frames']}")
+    print(f"output FPS         : {result.metadata['output']['target_fps']}")
     return 0
 
 

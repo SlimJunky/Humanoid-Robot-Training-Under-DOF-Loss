@@ -33,7 +33,6 @@ args_cli = parser.parse_args()
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-# Default IsaacLab Imports that require the app to be running
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.sim import SimulationCfg, SimulationContext
@@ -43,8 +42,7 @@ from isaaclab_assets import G1_MINIMAL_CFG
 
 
 def to_serializable(x):
-    """Convert tensors / numpy / misc objects into JSON-safe Python values."""
-    # torch tensors
+    '''Convert tensors / numpy / misc objects into JSON-safe Python values'''
     if hasattr(x, "detach") and hasattr(x, "cpu"):
         return x.detach().cpu().tolist()
     # numpy arrays / scalars
@@ -153,16 +151,16 @@ def main():
     out_path.write_text(json.dumps(to_serializable(dump), indent=2), encoding="utf-8")
 
 
-    print(f"[INFO] Saved G1 asset dump to: {out_path}")
-    print(f"[INFO] Num joints: {dump['num_joints']}")
-    print(f"[INFO] Num bodies: {dump['num_bodies']}")
-    print("[INFO] Joint names in articulation order:")
+    print(f"Saved G1 asset dump to: {out_path}")
+    print(f"Num joints: {dump['num_joints']}")
+    print(f" Num bodies: {dump['num_bodies']}")
+    print("Joint names in articulation order:")
     for item in joint_table:
         print(f"  {item['index']:02d}: {item['name']} | default={item['default_pos']:.6f} | "
               f"limits=({item['limit_lower']:.6f}, {item['limit_upper']:.6f})")
 
     if args_cli.stay_open:
-        print("[INFO] Scene is open. Close the app window or Ctrl+C to stop.")
+        print("Scene is open")
         while simulation_app.is_running():
             sim.step()
             robot.update(sim.get_physics_dt())

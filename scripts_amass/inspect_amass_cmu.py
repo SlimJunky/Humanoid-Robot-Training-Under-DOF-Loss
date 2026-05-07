@@ -7,7 +7,7 @@ from __future__ import annotations
 
 # Inspect amass cmu mocap SMPL+H download files. Reads the.npz files and tries to make a guess based on rough motion type data and filename keywords 
 # To create a JSON and CSV with information about the different poses that i can match up with the dataset website.
-# Those clips will then be used as the required motion capture data and a skeleton will be mapped onto Unitree G1. 
+# Those clips will then be used as the required motion capture data and a skeleton will be mapped onto minimal Unitree G1 asset. 
 
 import argparse
 import csv
@@ -27,7 +27,6 @@ LABEL_KEYWORDS = {
 }
 
 def find_project_root() -> Path:
-    """Find the repository root from this script location."""
     current = Path(__file__).resolve()
 
     for parent in [current.parent, *current.parents]:
@@ -41,7 +40,6 @@ def find_project_root() -> Path:
 
 
 def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
-    """Resolve absolute paths directly, and relative paths from the project root."""
     path = Path(path_value).expanduser()
 
     if path.is_absolute():
@@ -51,7 +49,6 @@ def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
 
 
 def project_relative(path: Path, project_root: Path) -> str:
-    """Store paths relative to the project root where possible."""
     try:
         return path.resolve().relative_to(project_root.resolve()).as_posix()
     except ValueError:

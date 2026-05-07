@@ -152,7 +152,7 @@ Some examples of packages that can likely be excluded are:
 
 ## Scripts
 
-### Dump Unitree G1 Asset Information
+### Dump Unitree G1 Asset Information - g1_dump_asset_info.py
 
 This script launches a minimal Isaac Lab scene, spawns the Unitree G1 robot using `G1_MINIMAL_CFG`, and exports useful robot asset information such as joint names, body names, default joint positions, velocity values, and joint limits.
 
@@ -167,9 +167,9 @@ python scripts/g1_dump_asset_info.py --out outputs/g1_asset_dump.json
 ```
 
 
-## Inspect AMASS Motion Files and Generate Manifest
+## Inspect AMASS Motion Files and Generate Manifest - inspect_amass_cmu.py
 
-This script scans a folder of AMASS `.npz` motion files and creates a JSON and CSV manifest. It records useful information such as file name, relative path, motion label guess, FPS, number of frames, duration, gender, and available AMASS keys.
+This script scans a folder of AMASS `.npz` motion files and creates a JSON and CSV manifest. It records useful information such as file name, relative path, motion label guess, FPS, number of frames, duration, and available AMASS keys.
 
 The manifests are useful for selecting candidate clips and understanding the format of the data before preparing them for retargeting onto the Unitree G1 robot. Mainly used for debugging not part of the pipeline required to run the experiment.
 
@@ -179,7 +179,7 @@ The manifests are useful for selecting candidate clips and understanding the for
 python scripts_amass/inspect_amass_cmu.py --input_dir data/selected_data/Walk --include_all
 ```
 
-### Prepare AMASS Motion for Retargeting
+### Prepare AMASS Motion for Retargeting - amass_retarget_preparation.py
 
 This script prepares a selected AMASS `.npz` motion file into a simpler retarget-ready format for later Unitree G1 mapping. It extracts the SMPL+H body pose, hand pose, root translation, root orientation, root quaternion, root yaw, betas, and timing information.
 
@@ -199,4 +199,17 @@ Please make sure to obtain the right pose data 37_01_poses as SMPL+H from the AM
 python scripts_amass/amass_retarget_preparation.py data/selected_data/Walk/37_01_poses_slow_walk.npz --out-dir data/retarget_ready --target-fps 60
 ```
 
+### Create First-Pass G1 Joint Targets from Retarget-Ready AMASS Motion - g1_map_walk_offline_pass.py
+
+This script converts a retarget-ready AMASS motion file into a Unitree G1 joint mapping target file.
+
+It uses the previously generated G1 asset dump to read the exact Isaac Lab G1 joint order, default joint positions, and soft joint limits. The script starts each frame from the G1 default joint pose, maps selected SMPL+H body joints onto matching G1 joints, clips the result to the G1 soft joint limits, and saves the result as a playback/training-ready `.npz` file.
+
+This first-pass mapping is used before generating Behavioral Cloning demonstrations. Please use the playback script for a visual check and make sure the g1_asset_dump.json file and the retarget_ready.npz file generated from the "amass_retarget_prepartation".py script.
+
+#### Run Command
+
+```powershell
+python scripts_amass/map_motion_to_g1_first_pass.py data/retarget_ready/Walk/37_01_poses_slow_walk_retarget_ready.npz --g1-dump-json outputs/g1_asset_dump.json --out-dir data/mapped
+```
 

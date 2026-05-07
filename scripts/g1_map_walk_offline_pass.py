@@ -1,6 +1,9 @@
 
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 '''Based on G1 dump data and retarget ready json run this to created first_pass .npz and first_pass .json to load retarget-ready walk file
 load the dumped G1 joint order and soft limit and start every frame from G1 default joint pose. Clips mapped joints to expected minimal G1 soft limits
 Saves the resulting G1 joint targets. Generates a first pass .npz file where one row per frame and one column per G1 joint.
@@ -42,7 +45,7 @@ SMPLH_BODY_JOINTS = [
 ]
 
 
-# Mapping spec trying to match up to Unitree G1 asset. Fine tune sign and scale based on output and perceived motion for proper target file.
+# Mapping spec trying to match up to the minimal Unitree G1 asset. 
 DEFAULT_MAPPING_SPEC: dict[str, dict[str, Any]] = {
     # torso / spine
     "torso_joint": {
@@ -155,6 +158,36 @@ DEFAULT_MAPPING_SPEC: dict[str, dict[str, Any]] = {
     },
 }
 
+def find_project_root() -> Path:
+    '''Find the repository root from this script location.'''
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+        if (parent / ".git").exists():
+            return parent
+
+    # Expected fallback if script is in /scripts_amass/script_name.py
+    return current.parents[1]
+
+
+def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
+    '''Resolve absolute paths directly, and relative paths from the project root'''
+    path = Path(path_value).expanduser()
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+
+def project_relative(path: Path, project_root: Path) -> str:
+    '''Store paths relative to the project root where possible'''
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 @dataclass
 class MappingRecord:
@@ -214,9 +247,12 @@ def body_joint_block(pose_body: np.ndarray, joint_name: str, smpl_index: dict[st
     return pose_body[:, start:end]
 
 
-def load_mapping_spec(path: Path | None) -> dict[str, dict[str, Any]]:
+def load_mapping_spec(path: Path | None, project_root: Path) -> dict[str, dict[str, Any]]:
     if path is None:
         return DEFAULT_MAPPING_SPEC
+
+    path = resolve_project_path(path, project_root)
+
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -227,13 +263,20 @@ def map_motion_to_g1(
     g1_dump_json_path: Path,
     out_dir: Path,
     mapping_spec_path: Path | None = None,
+    project_root: Path | None = None,
 ) -> tuple[Path, Path]:
+    project_root = project_root or find_project_root()
+
+    retarget_npz_path = resolve_project_path(retarget_npz_path, project_root)
+    g1_dump_json_path = resolve_project_path(g1_dump_json_path, project_root)
+    out_dir = resolve_project_path(out_dir, project_root)
+
     if not retarget_npz_path.exists():
         raise FileNotFoundError(f"Retarget-ready motion not found: {retarget_npz_path}")
     if not g1_dump_json_path.exists():
         raise FileNotFoundError(f"G1 dump JSON not found: {g1_dump_json_path}")
 
-    mapping_spec = load_mapping_spec(mapping_spec_path)
+    mapping_spec = load_mapping_spec(mapping_spec_path, project_root)
 
     with np.load(retarget_npz_path, allow_pickle=True) as data:
         if "pose_body" not in data:
@@ -322,7 +365,8 @@ def map_motion_to_g1(
 
     clip_count = int(np.count_nonzero(np.abs(joint_targets - joint_targets_before_clip) > 1e-12))
 
-     # Count how many values were clipped for each joint good for debugging in JSON and improving fine tuning of mapping.
+     # Count how many values were clipped for each joint good for debugging in JSON and improving fine tuning of mapping making sure its correct
+     # Expecting clipping for the fingers but this can be ignored and identified in JSON.
     per_joint_clip_counts = {
         joint_names[j]: int(
             np.count_nonzero(np.abs(joint_targets[:, j] - joint_targets_before_clip[:, j]) > 1e-12)
@@ -343,11 +387,13 @@ def map_motion_to_g1(
         sorted(mapped_per_joint_clip_counts.items(), key=lambda kv: kv[1], reverse=True)
     )
 
-    ensure_dir(out_dir)
+    final_out_dir = out_dir / category
+    ensure_dir(final_out_dir)
 
+    #Default output naming convention.
     out_stem = f"{retarget_npz_path.stem}_g1_first_pass"
-    out_npz = out_dir / f"{out_stem}.npz"
-    out_json = out_dir / f"{out_stem}.json"
+    out_npz = final_out_dir / f"{out_stem}.npz"
+    out_json = final_out_dir / f"{out_stem}.json"
 
     np.savez_compressed(
         out_npz,
@@ -359,22 +405,22 @@ def map_motion_to_g1(
         soft_joint_upper=soft_hi,
         time_s=time_s if time_s is not None else np.arange(num_frames, dtype=np.float64),
         source_fps=np.array(source_fps if source_fps is not None else -1.0, dtype=np.float64),
-        source_motion=np.array(str(retarget_npz_path), dtype=object),
-        g1_dump_json=np.array(str(g1_dump_json_path), dtype=object),
+        source_motion=np.array(project_relative(retarget_npz_path, project_root), dtype=object), #needs re-target ready npz
+        g1_dump_json=np.array(project_relative(g1_dump_json_path, project_root), dtype=object), #needs g1 dump information
         category=np.array(category, dtype=object),
         mapped_g1_joint_names=np.array([r.g1_joint for r in applied_records], dtype=object),
     )
 
     summary = {
         "source": {
-            "retarget_ready_npz": str(retarget_npz_path.resolve()),
-            "g1_dump_json": str(g1_dump_json_path.resolve()),
+            "retarget_ready_npz": project_relative(retarget_npz_path, project_root),
+            "g1_dump_json": project_relative(g1_dump_json_path, project_root),
             "source_motion_name": source_motion_name,
             "category": category,
         },
         "output": {
-            "mapped_npz": str(out_npz.resolve()),
-            "mapped_json": str(out_json.resolve()),
+            "mapped_npz": project_relative(out_npz, project_root),
+            "mapped_json": project_relative(out_json, project_root),
             "num_frames": num_frames,
             "num_g1_joints": num_joints,
         },
@@ -389,7 +435,7 @@ def map_motion_to_g1(
             "mapped_per_joint_clip_counts": mapped_per_joint_clip_counts,
             "mapped_per_joint_clip_counts_sorted": mapped_per_joint_clip_counts_sorted,
             "notes": [
-                "This is a first-pass offline mapping, not final verified retargeting.",
+                "This is a first-pass offline mapping.",
                 "Unmapped joints remain at G1 default joint positions.",
                 "Mapped joints are clipped to G1 soft joint limits.",
                 "Axis choices and signs are first guesses and should be tuned by playback.",
@@ -406,7 +452,7 @@ def map_motion_to_g1(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a first-pass offline AMASS slow-walk -> Unitree G1 mapping using retarget-ready motion and a G1 asset dump."
+        description="Create a first-pass offline AMASS slow-walk from minimal Unitree G1 mapping using retarget-ready motion and a G1 asset dump."
     )
     parser.add_argument(
         "retarget_npz",
@@ -432,21 +478,23 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    project_root = find_project_root()
 
-    retarget_npz = Path(args.retarget_npz.strip())
-    g1_dump_json = Path(args.g1_dump_json.strip())
-    out_dir = Path(args.out_dir.strip())
-    mapping_spec_json = Path(args.mapping_spec_json.strip()) if args.mapping_spec_json else None
+    retarget_npz = resolve_project_path(args.retarget_npz.strip(), project_root)
+    g1_dump_json = resolve_project_path(args.g1_dump_json.strip(), project_root)
+    out_dir = resolve_project_path(args.out_dir.strip(), project_root)
+    mapping_spec_json = resolve_project_path(args.mapping_spec_json.strip(), project_root) if args.mapping_spec_json else None
 
     out_npz, out_json = map_motion_to_g1(
         retarget_npz_path=retarget_npz,
         g1_dump_json_path=g1_dump_json,
         out_dir=out_dir,
         mapping_spec_path=mapping_spec_json,
+        project_root=project_root,
     )
 
-    print(f"Mapped NPZ : {out_npz}")
-    print(f"Mapped JSON: {out_json}")
+    print(f"Mapped NPZ : {project_relative(out_npz, project_root)}")
+    print(f"Mapped JSON: {project_relative(out_json, project_root)}")
     return 0
 
 
