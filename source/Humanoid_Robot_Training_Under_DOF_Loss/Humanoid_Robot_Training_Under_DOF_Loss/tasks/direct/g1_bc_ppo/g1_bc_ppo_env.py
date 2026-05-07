@@ -63,12 +63,12 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
     # files, change these to match external project location of the base path
     bc_policy_path: str = (
         r"C:\MAIN PROJECT CODE\Humanoid_Robot_Training_Under_DOF_Loss"
-        r"\robomimic_WSL\bc_walking_policy_checkpoints\g1_bc_walk_V1\g1_model_epoch_81_best.pt"
+        r"\bc_walking_policy_checkpoints\g1_bc_walk\g1_model_epoch_81_best.pt"
     )
 
     bc_meta_json: str = (
         r"C:\MAIN PROJECT CODE\Humanoid_Robot_Training_Under_DOF_Loss"
-        r"\data\BC_datasets\g1_walk_reference_bc_1024_regular.json"
+        r"\data\bc_dataset_demonstrations\g1_walk_reference_bc_1024_regular.json"
     )
 
     # ----------------REWARD WEIGHTS IMPORTANT TUNE-----------------------------
