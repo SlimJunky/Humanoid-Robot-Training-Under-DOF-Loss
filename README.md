@@ -213,3 +213,16 @@ This first-pass mapping is used before generating Behavioral Cloning demonstrati
 python scripts_amass/map_motion_to_g1_first_pass.py data/retarget_ready/Walk/37_01_poses_slow_walk_retarget_ready.npz --g1-dump-json outputs/g1_asset_dump.json --out-dir data/mapped
 ```
 
+### Play Mapped G1 Motion in Isaac Lab
+
+This script launches a simple Isaac Lab scene, spawns the Unitree G1 robot using `G1_MINIMAL_CFG`, and plays back a mapped G1 joint-target `.npz` file. It is used to visually inspect the first-pass retargeted motion before using it for BC demos generated in another script before BC policy prior
+
+The script checks that the joint order in the mapped `.npz` file matches the current G1 articulation. It then sends each frame of `joint_targets` to the robot as position targets and steps the physics simulation.
+
+This is a physics-based playback script so I recommend running this with the below command enabling frozen root to visually see mapped leg movement.
+
+#### Run Command
+
+```powershell
+python scripts_amass/play_mapped_g1_motion.py data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz --loop --reset-on-loop
+```

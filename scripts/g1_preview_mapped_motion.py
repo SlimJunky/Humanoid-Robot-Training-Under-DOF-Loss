@@ -9,9 +9,38 @@ from pathlib import Path
 import numpy as np
 from isaaclab.app import AppLauncher
 
+def find_project_root() -> Path:
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+        if (parent / ".git").exists():
+            return parent
+
+    return current.parents[1]
+
+
+def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
+    path = Path(path_value).expanduser()
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+
+def project_relative(path: Path, project_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 parser = argparse.ArgumentParser(
     description="Preview a mapped G1 motion clip by directly writing joint states."
 )
+
 parser.add_argument("mapped_npz", type=str, help="Path to mapped G1 motion npz.")
 parser.add_argument(
     "--fps",
@@ -54,9 +83,11 @@ from isaaclab_assets import G1_MINIMAL_CFG
 
 
 def main():
-    mapped_path = Path(args_cli.mapped_npz)
+    project_root = find_project_root()
+    mapped_path = resolve_project_path(args_cli.mapped_npz.strip(), project_root)
+
     if not mapped_path.exists():
-        raise FileNotFoundError(f"Mapped motion not found: {mapped_path}")
+        raise FileNotFoundError(f"map motion not found: {mapped_path}")
 
     with np.load(mapped_path, allow_pickle=True) as data:
         joint_targets_np = np.asarray(data["joint_targets"], dtype=np.float64)
@@ -89,9 +120,9 @@ def main():
     # Verify joint order matches the mapped file
     robot_joint_names = list(robot.data.joint_names)
     if robot_joint_names != joint_names_file:
-        print("[ERROR] Joint order mismatch between mapped file and current G1 articulation.")
-        print("[ERROR] File joints : ", joint_names_file)
-        print("[ERROR] Robot joints: ", robot_joint_names)
+        print("[ERROR] joint order mismatch between mapped file and current G1 articulation.")
+        print("[ERROR] file joints : ", joint_names_file)
+        print("[ERROR] robot joints: ", robot_joint_names)
         raise RuntimeError("Joint name/order mismatch. Rebuild the mapped file against this asset.")
 
     # Put robot in a visible fixed-root pose
@@ -121,12 +152,12 @@ def main():
     sim_dt = sim.get_physics_dt()
     sim_steps_per_frame = max(1, int(round((1.0 / playback_fps) / sim_dt)))
 
-    print(f"[INFO] Loaded mapped motion: {mapped_path}")
-    print(f"[INFO] Frames: {num_frames}")
-    print(f"[INFO] Joints: {num_joints}")
-    print(f"[INFO] Playback FPS: {playback_fps:.3f}")
-    print(f"[INFO] Sim dt: {sim_dt:.6f}")
-    print(f"[INFO] Sim steps per motion frame: {sim_steps_per_frame}")
+    print(f" loaded mapped motion: {project_relative(mapped_path, project_root)}")
+    print(f" Frames: {num_frames}")
+    print(f"joints: {num_joints}")
+    print(f" Playback FPS: {playback_fps:.3f}")
+    print(f"Sim dt: {sim_dt:.6f}")
+    print(f"sim steps per motion frame: {sim_steps_per_frame}")
 
     frame_idx = 0
     step_count = 0
@@ -135,11 +166,11 @@ def main():
         if step_count % sim_steps_per_frame == 0:
             q = torch.tensor(joint_targets_np[frame_idx], dtype=torch.float32, device=robot.device).unsqueeze(0)
 
-            # Keep the base/root fixed for a clean kinematic preview
+            # keep the root fixed for a clean kinematic preview
             robot.write_root_pose_to_sim(root_state[:, :7])
             robot.write_root_velocity_to_sim(root_state[:, 7:])
 
-            # Directly write the joint state for visual inspection
+            # directly write the joint state for visual inspection
             robot.write_joint_state_to_sim(q, zero_joint_vel)
             robot.reset()
 
