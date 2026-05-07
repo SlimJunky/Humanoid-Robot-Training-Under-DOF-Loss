@@ -1,3 +1,7 @@
+
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 ''' Empty world in isaac lab only for Unitree G1 asset taken from similar environments in tutorial NVIDIA Isaac Lab. 
 script to gather information about G1 asset in selected empty world for retargeting.'''
 
@@ -6,6 +10,16 @@ import json
 from pathlib import Path
 
 from isaaclab.app import AppLauncher
+
+def find_project_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+    raise RuntimeError("Could not find project root. Expected pyproject.toml and source/ folder.")
+
+
+PROJECT_ROOT = find_project_root()
 
 
 #  Parser arguments for script running and output save location
@@ -133,6 +147,8 @@ def main():
 
     #JSON
     out_path = Path(args_cli.out)
+    if not out_path.is_absolute():
+        out_path = PROJECT_ROOT / out_path
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(to_serializable(dump), indent=2), encoding="utf-8")
 

@@ -8,12 +8,12 @@ Once a stable baseline locomotion policy is obtained, it is evaluated under cont
 
 The objective  of this study is not to achieve perfect human walking or to match the selected motion-capture dataset perfectly but instead to evaluate the fault tolerance of a learned humanoid controller under degree-of-freedom loss. By comparing nominal and faulty runs, the experiments aim to identify which joints have the greatest effect on locomotion stability and determine the point at which actuator degradation leads to policy failure.
 
-Below is some helpful suggestions on how to run important key scripts and how to run this external Isaac Lab project template onto your device. This repository is part of supporting evidence to validate the results from its accompnaying dissertation paper.
+Below is some helpful suggestions on how to run important key scripts and how to run this external Isaac Lab project template onto your device. This repository is part of supporting evidence to validate the results from its accompanying dissertation paper.
 
 
 
 
-# Template for Isaac Lab Projects as provided by Isaac Lab NVIDIA external project template generator
+## Isaac Lab NVIDIA external project template
 
 ## Overview
 
@@ -39,6 +39,7 @@ It allows you to develop in an isolated environment, outside of the core Isaac L
     ```bash
     # use 'PATH_TO_isaaclab.sh|bat -p' instead of 'python' if Isaac Lab is not installed in Python venv or conda
     python -m pip install -e source/Humanoid_Robot_Training_Under_DOF_Loss
+    ```
 
 - Verify that the extension is correctly installed by:
 
@@ -148,3 +149,20 @@ Some examples of packages that can likely be excluded are:
 "<path-to-isaac-sim>/extscache/omni.services.*"     // Services tools
 ...
 ```
+
+## Scripts
+
+### Dump Unitree G1 Asset Information
+
+This script launches a minimal Isaac Lab scene, spawns the Unitree G1 robot using `G1_MINIMAL_CFG`, and exports useful robot asset information such as joint names, body names, default joint positions, velocity values, and joint limits.
+
+The script is useful for checking the exact G1 joint order used by Isaac Lab before retargeting, imitation learning, or reinforcement learning.
+
+The output file will be saved to `outputs/g1_asset_dump.json` relative to the project root.
+
+### Run Command
+
+```powershell
+python scripts/g1_dump_asset_info.py --out outputs/g1_asset_dump.json
+```
+
