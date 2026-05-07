@@ -1,8 +1,11 @@
 
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 '''Take the robo-mimic policy checkpoint file and the BC demonstration json action bounds meta data then based off the rollout robomimic script
-Take the motion policy and make it play repeatedly to gauge movement before RL tuning, AKA closed-loop BC policy player. ROllout the policy in Isaac Lab environment without
+ make it play repeatedly to gauge movement before RL tuning, AKA closed-loop BC policy player. ROllout the policy in Isaac Lab environment without
 the need for the wrapper. Rebuilds same observation format used during BC training, ask learned policy for next action each sim step, converts that action back
 into real joint targets and sends the targets to the Unitree G1 robot in the simulation.'''
 
@@ -19,6 +22,34 @@ import torch
 
 from isaaclab.app import AppLauncher
 
+# Classic helper find path roots
+def find_project_root() -> Path:
+    current = Path(__file__).resolve()
+
+    for parent in [current.parent, *current.parents]:
+        if (parent / "pyproject.toml").exists() and (parent / "source").exists():
+            return parent
+        if (parent / ".git").exists():
+            return parent
+
+    return current.parents[1]
+
+
+def resolve_project_path(path_value: str | Path, project_root: Path) -> Path:
+    path = Path(path_value).expanduser()
+
+    if path.is_absolute():
+        return path
+
+    return project_root / path
+
+
+def project_relative(path: Path, project_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
 #Parser Arguments
 
 parser = argparse.ArgumentParser(description="Closed-loop BC policy playback for G1 in Isaac Lab.")
@@ -32,7 +63,8 @@ parser.add_argument("--fall-reset-height", type=float, default=0.45, help="Reset
 parser.add_argument("--debug-every", type=int, default=120, help="Print debug info every N sim steps")
 parser.add_argument("--control-decimation", type=int, default=2, help="Run policy every N physics steps. 2 means 120 Hz sim / 2 = 60 Hz policy control.")
 # So I can compare walking policy to direct reference motion initially quickly
-parser.add_argument("--use-reference-actions", action="store_true", help="Ignore BC policy and directly play mapped reference joint targets from source_mapped_npz.")
+parser.add_argument("--" \
+"use-reference-actions", action="store_true", help="Ignore BC policy and directly play mapped reference joint targets from source_mapped_npz.")
 parser.add_argument("--freeze-root", action="store_true", help="Hold the pelvis/root fixed in space so the legs can be inspected without falling.")
 parser.add_argument("--freeze-root-height", type=float, default=None, help="Root height used when --freeze-root is enabled. Defaults to --root-height.")
 
@@ -105,8 +137,10 @@ def print_joint_sample(label: str, values: np.ndarray, joint_names: list[str], s
 
 
 def main():
-    ckpt_path = Path(args_cli.bc_ckpt) #.pth file of best BC model control policy
-    meta_path = Path(args_cli.bc_meta_json) #BC demos dataset JSON metadata
+    project_root = find_project_root()
+
+    ckpt_path = resolve_project_path(args_cli.bc_ckpt.strip(), project_root) #.pth file of best BC model control policy
+    meta_path = resolve_project_path(args_cli.bc_meta_json.strip(), project_root) #BC demos dataset JSON metadata
 
     if not ckpt_path.exists():
         raise FileNotFoundError(f"BC checkpoint not found: {ckpt_path}")
@@ -114,9 +148,9 @@ def main():
         raise FileNotFoundError(f"BC metadata json not found: {meta_path}")
     
     # Debugging information
-    print(f"[INFO] BC checkpoint: {ckpt_path.resolve()}")
-    print(f"[INFO] BC metadata  : {meta_path.resolve()}")
-    print(f"[INFO] Requested device: {args_cli.device}")
+    print(f"BC checkpoint: {project_relative(ckpt_path, project_root)}")
+    print(f"BC metadata  : {project_relative(meta_path, project_root)}")
+    print(f"Requested device: {args_cli.device}")
 
     #Load BC metadata required to determine the expected joint order and low / high action bounds used for normalized BC outputs
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -132,13 +166,13 @@ def main():
     actions_normalized = bool(meta.get("actions_normalized", True))
     
 
-    print(f"[INFO] Loaded metadata joint count: {len(joint_names_file)}")
-    print(f"[INFO] obs_dim={obs_dim}, act_dim={act_dim}")
-    print(f"[INFO] Action bounds shape: lo={action_lo.shape}, hi={action_hi.shape}")
-    print(f"[INFO] Action low range : min={action_lo.min():+.4f}, max={action_lo.max():+.4f}")
-    print(f"[INFO] Action high range: min={action_hi.min():+.4f}, max={action_hi.max():+.4f}")
-    print(f"[INFO] include_phase={include_phase}")
-    print(f"[INFO] actions_normalized={actions_normalized}")
+    print(f"Loaded metadata joint count: {len(joint_names_file)}")
+    print(f"obs_dim={obs_dim}, act_dim={act_dim}")
+    print(f"Action bounds shape: lo={action_lo.shape}, hi={action_hi.shape}")
+    print(f"Action low range : min={action_lo.min():+.4f}, max={action_lo.max():+.4f}")
+    print(f"Action high range: min={action_hi.min():+.4f}, max={action_hi.max():+.4f}")
+    print(f"include_phase={include_phase}")
+    print(f"actions_normalized={actions_normalized}")
 
     if action_lo.shape[0] != act_dim or action_hi.shape[0] != act_dim:
         raise RuntimeError(
@@ -146,10 +180,9 @@ def main():
             f"act_dim={act_dim}, action_lo={action_lo.shape}, action_hi={action_hi.shape}"
         )
 
-    #Load torch policy model.
     policy = torch.jit.load(str(ckpt_path), map_location=args_cli.device)
     policy.eval()
-    print("[INFO] TorchScript BC policy loaded successfully.")
+    print("TorchScript BC policy loaded successfully.")
 
 
 
@@ -181,9 +214,9 @@ def main():
     sim = SimulationContext(sim_cfg)
     sim.set_camera_view([2.8, 2.0, 1.8], [0.0, 0.0, 0.8])
 
-    print(f"[INFO] Simulation dt: {sim_cfg.dt:.6f}")
-    print(f"[INFO] Gait period s: {args_cli.gait_period_s:.4f}")
-    print(f"[INFO] Debug print every {args_cli.debug_every} sim steps")
+    print(f"Simulation dt: {sim_cfg.dt:.6f}")
+    print(f"Gait period s: {args_cli.gait_period_s:.4f}")
+    print(f"Debug print every {args_cli.debug_every} sim steps")
 
     #Default for the simulation world
     ground_cfg = sim_utils.GroundPlaneCfg()
@@ -205,8 +238,8 @@ def main():
     # Joint order safety check making sure the G1 in Isaac Lab and G1 perceived from BC dataset have the right joint order.
     # BC model needs to output targets for right joints to follow correct motion policy behavior.
     robot_joint_names = list(robot.data.joint_names)
-    print(f"[INFO] Robot joint count: {len(robot_joint_names)}")
-    print(f"[INFO] First 10 robot joints: {robot_joint_names[:10]}")
+    print(f"Robot joint count: {len(robot_joint_names)}")
+    print(f"First 10 robot joints: {robot_joint_names[:10]}")
 
     if robot_joint_names != joint_names_file:
         print("[ERROR] Joint order mismatch!")
@@ -214,16 +247,30 @@ def main():
         print(f"[ERROR] Robot first 10 joints: {robot_joint_names[:10]}")
 
         raise RuntimeError(
-            "Joint order mismatch between BC metadata and current G1 articulation.\n"
+            "joint order mismatch between BC metadata and current G1 articulation.\n"
             f"BC:    {joint_names_file}\n"
             f"Robot: {robot_joint_names}"
         )
     
-    print("[INFO] Joint order check passed.")
+    print("Joint order check passed.")
 
     # starting from all zero joint or robot default joint reset may be incorrect to match stable standing pose may need to tune for start.
 
-    source_mapped_npz = Path(meta["source_mapped_npz"])
+    source_mapped_npz_value = meta.get("source_mapped_npz", "")
+
+    if not source_mapped_npz_value:
+        raise KeyError(
+            "BC metadata JSON is missing 'source_mapped_npz'. "
+            "Add a project-relative path such as "
+            "'data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz'."
+        )
+
+    source_mapped_npz = resolve_project_path(meta["source_mapped_npz"], project_root)
+
+    # Should put this to force mapped .npz to be available 
+    if not source_mapped_npz.exists():
+        raise FileNotFoundError(f"source_mapped_npz from metadata was not found: {source_mapped_npz}")
+
 
     if source_mapped_npz.exists():
         with np.load(source_mapped_npz, allow_pickle=True) as data:
@@ -240,19 +287,19 @@ def main():
             )
 
         default_joint_pos_np = reference_joint_targets[0].copy()
-        print("[INFO] Reset joint pose uses first frame of mapped reference motion.")
+        print("Reset joint pose uses first frame of mapped reference motion.")
 
     else:
         default_joint_pos_np = robot.data.default_joint_pos[0].detach().cpu().numpy().astype(np.float32)
-        print("[WARN] Could not find source_mapped_npz. Using default Isaac Lab joint pose.")
+        print("could not find source_mapped_npz. Using default Isaac Lab joint pose.")
 
 
     #default_joint_pos_np = robot.data.default_joint_pos[0].detach().cpu().numpy().astype(np.float32)
-    #print(f"[INFO] Reset joint pose uses initial default robot pose. shape={default_joint_pos_np.shape}")
+    #print(f"Reset joint pose uses initial default robot pose. shape={default_joint_pos_np.shape}")
 
     reset_robot(robot, default_joint_pos_np, args_cli.root_x, args_cli.root_y, args_cli.root_height)
     robot.update(sim.get_physics_dt())
-    print(f"[INFO] Initial reset at x={args_cli.root_x:.3f}, y={args_cli.root_y:.3f}, z={args_cli.root_height:.3f}")
+    print(f"Initial reset at x={args_cli.root_x:.3f}, y={args_cli.root_y:.3f}, z={args_cli.root_height:.3f}")
 
     sim_dt = sim.get_physics_dt()
     phase = 0.0
@@ -265,8 +312,8 @@ def main():
     last_q_target = default_joint_pos_np.copy()
     last_policy_out = np.zeros((act_dim,), dtype=np.float32)
 
-    print(f"[INFO] Control decimation: {control_decimation}")
-    print(f"[INFO] Effective policy rate: {1.0 / (sim_dt * control_decimation):.2f} Hz") # with dt = 1/ 120 then control decimation policy rate of 60.00 Hz
+    print(f"Control decimation: {control_decimation}")
+    print(f"Effective policy rate: {1.0 / (sim_dt * control_decimation):.2f} Hz") # with dt = 1/ 120 then control decimation policy rate of 60.00 Hz
 
     sample_joint_names = [
         "left_hip_pitch_joint",
@@ -304,8 +351,8 @@ def main():
     left_foot_body_id = left_foot_ids[0]
     right_foot_body_id = right_foot_ids[0]
 
-    print(f"[INFO] Debug left foot body : {left_foot_names[0]} id={left_foot_body_id}")
-    print(f"[INFO] Debug right foot body: {right_foot_names[0]} id={right_foot_body_id}")
+    print(f"Debug left foot body : {left_foot_names[0]} id={left_foot_body_id}")
+    print(f"Debug right foot body: {right_foot_names[0]} id={right_foot_body_id}")
 
     cycle_idx = 0
     prev_phase = phase
@@ -337,7 +384,7 @@ def main():
 
 
         if root_z < args_cli.fall_reset_height:
-            print(f"[INFO] Resetting after fall. root_z={root_z:.3f}")
+            print(f"Resetting after fall. root_z={root_z:.3f}")
             print_joint_sample("q before fall", q, joint_names_file, sample_joint_names)
             print_joint_sample("qd before fall", qd, joint_names_file, sample_joint_names)
             reset_robot(robot, default_joint_pos_np, args_cli.root_x, args_cli.root_y, args_cli.root_height)
@@ -536,7 +583,7 @@ def main():
             phase = (phase + (sim_dt * control_decimation) / args_cli.gait_period_s) % 1.0
 
 
-        '''Summary cycle block'''
+        '''Summary cycle block for debugging and understanding how BC prior is predicting next movements in cycle'''
         if phase < prev_phase and len(cycle_stats["bc_ref_mean"]) > 0:
             print("\n================ BC / REFERENCE CYCLE SUMMARY ================")
             print(f"[CYCLE {cycle_idx}] frozen_root={args_cli.freeze_root} use_reference_actions={args_cli.use_reference_actions}")

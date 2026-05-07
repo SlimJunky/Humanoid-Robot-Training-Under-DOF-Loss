@@ -245,15 +245,15 @@ python scripts/g1_record_bc_reference_demos.py data/mapped/Walk/37_01_poses_slow
 
 ### Add Robomimic Train/Validation Masks - add_robomimic_train_valid_mask.py
 
-This script edits an existing Robomimic-style `.hdf5` dataset and adds the expected train and validation masks under the `/mask` group. These masks tell Robomimic which demonstration episodes should be used for training and which should be used for validation.
+This script edits an existing Robomimic style `.hdf5` dataset and adds the expected train and validation masks under the `/mask` group. These masks tell Robomimic which demonstration episodes should be used for training and which should be used for validation.
 
 For this project, the dataset was split using a `0.9` train ratio and `0.1` validation ratio. The script updates the HDF5 file in place and does not create a new dataset.
 
-This script was made to fix an oversight I missed before doing BC imitation learning using robomimic
+This script was made to fix an oversight I missed before doing BC imitation learning using Robo-mimic.
 
 ##### Run Command
 
-```powershell
+```bash
 python scripts_robomimic/add_robomimic_train_valid_mask.py data/bc_dataset_demonstrations/g1_walk_reference_bc_1024_regular.hdf5 --train-ratio 0.9 --valid-ratio 0.1 --seed 1 --overwrite
 ```
 
@@ -309,3 +309,84 @@ The output `.pt` path is provided manually as the second command argument. The f
 ```bash
 python scripts_robomimic/export_bc_policy_torchscript.py bc_walking_policy_checkpoints/g1_bc_walk/models/model_epoch_81_best.pth bc_walking_policy_checkpoints/g1_bc_walk/g1_model_epoch_81_best.pt --device cuda --obs-dim 75
 ```
+
+### Play Exported BC Policy in Isaac Lab - g1_play_bc_policy.py
+
+This script plays the exported TorchScript Behavioral Cloning policy inside Isaac Lab using the Unitree G1 robot. It rebuilds the same proprioceptive observation used during BC training, `q(37) + qd(37) + phase(1)`, runs the BC policy, denormalizes the output action back into G1 joint targets, and sends those targets to the robot.
+
+It is mainly used to visually inspect the weak BC prior before PPO training. The script can also freeze the root for easier inspection, or play the mapped reference actions directly for comparison reusing similar logic as previous scripts
+
+To run this it is recommended to have the "g1_walk_reference_bc_1024_regular.json" or similar file generated from "g1_record_bc_reference_demos.py" within the right folder directory
+
+```text
+data/bc_dataset_demonstrations/g1_walk_refernce_bc_1024_regular
+```
+
+The script uses the BC metadata JSON to load the correct joint order, action bounds, observation size, action size, and mapped reference `.npz` path. The Robomimic training config is not used here. This script needs the generated BC runtime metadata JSON.
+
+#### Run Command
+
+```powershell
+python scripts/g1_play_bc_policy.py bc_walking_policy_checkpoints/g1_bc_walk/g1_model_epoch_81_best.pt data/bc_dataset_demonstrations/g1_walk_reference_bc_1024_regular.json --root-height 0.78 --gait-period-s 4.25 --control-decimation 2 --debug-every 120
+```
+
+### PPO Walking Environment - g1_bc_ppo_env.py
+
+The main reinforcement learning environment is defined in:
+
+```text
+source/Humanoid_Robot_Training_Under_DOF_Loss/Humanoid_Robot_Training_Under_DOF_Loss/tasks/direct/g1_bc_ppo/g1_bc_ppo_env.py
+```
+
+### Train PPO Walking Policy - train.py
+
+This command trains the PPO residual walking policy using RSL-RL. The task loads `G1BCPPOEnv`, the TorchScript BC prior, and the mapped walking reference motion from the project relative paths defined in `G1BCPPOEnvCfg`.
+
+You can manage the amount of iterations and the number of parallel environments if your system supports this with the default commands provided by Isaac Lab.
+
+The results of the training run by default will go into:
+
+```text
+logs\rsl_rl\g1_bc_ppo_walk
+```
+
+The recommendation is to run this script always with --headless in order to improve performance.
+
+#### Run Command
+
+```powershell
+python scripts/rsl_rl/train.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 512 --headless --max_iterations 12000
+```
+
+This is an example of how you would continue training from a policy checkpoint, by directly stating the location of the .pt file with resume_path argument:
+
+```powershell
+python scripts\rsl_rl\train.py  --task Isaac-G1-BC-PPO-Walk-Direct-v0  --num_envs 512 --max_iterations 600 --headless  --resume --resume_path <PATH_TO_YOUR_MODEL>
+```
+
+### Watch Training Progress - TensorBoard
+
+If you have followed the install correctly with dependent packages then you should be able to use TensorBoard within this external Isaac Lab project.
+
+You can run look at an "O" file by binding the generated "O" file results from a specified folder as such:
+
+```powershell
+tensorboard --logdir logs/rsl_rl
+```
+
+To see all of the key training checkpoint milestones please look inside here and follow the same command with a path to the chosen training evidence folder:
+
+```text
+training_evidence\tensorboard_runs
+```
+
+### Play Trained PPO Policy - play.py
+
+This command plays back a trained PPO checkpoint in Isaac Lab. Use this after training to visually inspect the final locomotion policy without fault injection.
+
+Replace `<RUN_FOLDER>` and `<CHECKPOINT>` with the actual log folder and model checkpoint created during training.
+
+#### Run Command
+
+```powershell
+python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint logs/rsl_rl/<RUN_FOLDER>/<CHECKPOINT>.pt
