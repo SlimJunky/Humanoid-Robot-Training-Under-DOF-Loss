@@ -35,8 +35,6 @@ docker/.container.cfg
 !.vscode
 
 # Outputs
-**/output/*
-**/outputs/*
 **/videos/*
 **/wandb/*
 **/.neptune/*
@@ -85,10 +83,21 @@ runs/
 videos/
 checkpoints/
 
-data/raw/
-data/processed/
-data/retargeted/
-
 .env
 .venv/
 env/
+
+
+# Keep data/ and outputs/ folder structure, but ignore the contents
+
+# Ignore everything inside data
+/data/**
+!/data/
+!/data/**/
+!/data/**/.gitkeep
+
+# Ignore everything inside outputs
+/outputs/**
+!/outputs/
+!/outputs/**/
+
