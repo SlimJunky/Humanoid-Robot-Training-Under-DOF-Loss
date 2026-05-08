@@ -2,18 +2,172 @@
 
 This study investigates the robustness of humanoid locomotion policies trained using imitation learning and reinforcement learning in a simulated environment. The central research question is: **how does an on-policy reinforcement learning controller respond to partial actuator or degree-of-freedom failure, and which joints are most critical for maintaining stable locomotion?**
 
-The project uses a minimal Unitree G1 humanoid asset in Isaac Lab. A weak Behavioral Cloning (BC) policy is first trained from selected retargeted walking demonstrations and then used as a weak prior for Proximal Policy Optimisation (PPO). Rather than learning locomotion entirely from scratch, the PPO controller learns residual joint corrections around the BC policy output, allowing it to improve stability, balance, and forward stepping behaviour initially. Then the PPO algorithm is pushed to its limits and fine tuned with rewards and penalty terms whilst moving away from matching the BC prior. The humanoid robot develops while maintaining a target forward velocity, upright posture and a survival of an entire trial episode without falling under Isaac Lab simulator physics.
+The project uses a minimal Unitree G1 humanoid asset in Isaac Lab. A weak Behavioral Cloning (BC) policy is first trained from selected retargeted walking demonstrations and then used as a weak prior for Proximal Policy Optimisation (PPO). Rather than learning locomotion entirely from scratch, the PPO controller learns residual joint corrections around the BC policy output, allowing it to improve stability, balance, and forward stepping behaviour initially following a simple imitation learning pipeline practice. Then the PPO algorithm is pushed to its limits and fine tuned with rewards and penalty terms whilst moving away from matching the BC prior. The humanoid robot develops while maintaining a target forward velocity, upright posture and a survival of an entire trial episode without falling under Isaac Lab simulator physics.
 
 Once a stable baseline locomotion policy is obtained, it is evaluated under controlled fault conditions. These include partial torque reduction and complete joint locking applied after a fixed point in the trial episode. The resulting behaviour is measured using metrics such as survival time, fall rate, root height, forward velocity, lateral drift, base angular velocity, joint-torque usage and more.
 
-The objective  of this study is not to achieve perfect human walking or to match the selected motion-capture dataset perfectly but instead to evaluate the fault tolerance of a learned humanoid controller under degree-of-freedom loss. By comparing nominal and faulty runs, the experiments aim to identify which joints have the greatest effect on locomotion stability and determine the point at which actuator degradation leads to policy failure.
+The objective  of this study is not to achieve perfect human walking or to match the selected motion capture dataset perfectly but instead to evaluate the fault tolerance of a learned humanoid controller under degree-of-freedom loss. By comparing nominal and faulty runs, the experiments aim to identify which joints have the greatest effect on locomotion stability and determine the point at which actuator degradation leads to policy failure.
 
-Below is some helpful suggestions on how to run important key scripts and how to run this external Isaac Lab project template onto your device. This repository is part of supporting evidence to validate the results from its accompanying dissertation paper.
+Below is some helpful suggestions on how to run all the scripts in this repository and how to generate the data needed to repeat the experiments shown in the study. There is also a description of the environment and its supporting packages to be able to run this external isaac lab project aswell as the default provided install instructions. 
+
+This repository is part of supporting evidence to validate the results from its accompanying dissertation paper.
+
+## Hardware & Software Environment Details
+
+The experiments were developed and tested using Isaac Sim / Isaac Lab with GPU acceleration. The project was run from a Windows external Isaac Lab project, with Robomimic Behavioral Cloning training performed separately in a Linux Ubuntu/WSL Ubuntu Python environment.
 
 
+### Hardware Used:
+
+- Operating system: Microsoft Windows 10 Pro, Build 19045
+- System manufacturer/model: MSI MS-7915
+- CPU: Intel Core i7-4790K @ 4.00 GHz
+- CPU cores/threads: 4 cores / 8 logical processors
+- RAM: 24 GB
+- GPU: NVIDIA GeForce RTX 2080 SUPER
+- GPU VRAM: 8 GB
+- NVIDIA driver version: 591.86
+- CUDA driver version reported by NVIDIA-SMI: 13.1
 
 
-## Isaac Lab NVIDIA external project template
+### Used Software Packages & Conda Environments:
+
+```text
+- Recommended miniconda environment named as default "env_isaaclab" with all accompanying packages
+- NVIDIA Drivers >= 580.88 version
+- NVIDIA Isaac Sim 5.1.0-rc.19, any Isaac Sim 5.X should work
+- NVIDIA Isaaclab latest cloned repository from main branch, Isaac Lab 0.5.0.
+- isaaclab_rl-0.50 (comes with download)
+- isaaclab_tasks-0.11.14 (comes with download)
+- Python 3.11.15, any Python 3.11.X should work
+- PyTorch 2.7.0 with GPU acceleration enabled via CUDA 12.8 or better
+- torch-2.7.0+cu128
+- torchvision-0.22.0+cu128
+- torchaudio-2.7.0+cu128
+- RSL-RL library for PPO training during external project download
+- TensorBoard package for training log visualisation
+
+If you wish to recreate the BC imitation learning pipeline yourself this is possible by having the same packages and environment as shown below and also following the installation & documentation guide provided by the official Robo-mimic landing page. This is not required to view the stable policy controller or run the experiments described in the study.
+
+- Recommended miniconda environment within a Linux OS or through WSL named as default "robomimic_venv" with all accompanying packages
+- Robo-mimic v0.5 (latest) for Behavioral Cloning
+- Python 3.8.0
+- Pytorch 2.0.0, Wheels such as torch-2.0.0+cu118, torchvision-01.15.1+cu118, torchaudio-2.0.1+cu118
+- Recommended CMake 3.31 < CMake 4.X. Sometimes there is an issue with egl_probe within the robo_mimic install if CMake is not the older version.
+
+```
+Install robomimic following this guide for Linux installing robomimic from source and using the recommended PyTorch:
+
+```text
+https://robomimic.github.io/docs/introduction/installation.html
+```
+No optional installations or datasets are required.
+
+
+## Recommended Install Route
+
+To reproduce this project, first install Isaac Sim and Isaac Lab using the official NVIDIA documentation rather than installing packages manually one-by-one. The guides are available here:
+
+```text
+https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/pip_installation.html
+```
+
+Isaac Lab API which helped in designing and producing the code in this repository
+```text
+https://isaac-sim.github.io/IsaacLab/main/source/api/index.html
+```
+
+
+In this README is a provided default generated template for debugging the install below, please use the official NVIDIA repositories and documentation to debug the installation beyond this.
+
+Recommended setup order:
+
+1. Check the Isaac Sim 5.1 hardware and driver requirements. Check the packages & environment dependencies above
+2. Install Isaac Sim 5.1 using the recommended Python/pip installation route.
+3. Install Isaac Lab using the official Isaac Lab local installation guide.
+4. Clone this repository separately from the main Isaac Lab repository as an external Isaac Lab project.
+5. Activate the Isaac Lab Python/conda environment and install this project in editable mode from the repository root as such:
+
+```bash
+python -m pip install -e source/Humanoid_Robot_Training_Under_DOF_Loss
+```
+
+This repository was originally created from the Isaac Lab external project template generator. The important template choices for this project were:
+
+```text
+Project type: External Isaac Lab project
+Workflow: Direct RL environment
+RL library: RSL-RL
+Training algorithm: PPO
+Task style: Single-agent reinforcement learning
+Main environment: G1BCPPOEnv
+Main task name: Isaac-G1-BC-PPO-Walk-Direct-v0
+```
+
+To verify tasks are available to run after the project is installed use:
+
+```powershell
+python scripts/list_envs.py
+```
+
+
+## Obtaining AMASS SMPL+H Motion Capture Data
+
+
+## Minimum Data Processing Pipeline Required
+
+After obtaining the chosen AMASS / SMPL+H `.npz` walking motion file, the minimum processing pipeline needed for this project is:
+
+```text
+AMASS SMPL+H .npz
+retarget-ready AMASS .npz
+mapped Unitree G1 joint-target .npz
+Robomimic-style BC dataset metadata
+```
+Use the script information provided in this README to achieve this data processing or alternatively run these commands in tandem and place the resulting files in the correct location. This is required to be done locally and could not be pre-processed and re-distributed in order to keep within the BSD3-Clause that prevents the distribution of the SMPL+H motion capture data, modified or not, in a third-party area.
+
+
+### 1
+
+```powershell
+python scripts/g1_dump_asset_info.py --out outputs/g1_asset_dump.json
+```
+
+Before mapping the AMASS motion file onto Unitree G1, generate a G1 asset dump. This records the exact Isaac Lab joint order, default joint positions, body names, and joint limits used by `G1_MINIMAL_CFG`.
+
+### 2
+```powershell
+python scripts_amass/amass_retarget_preparation.py data/selected_data/Walk/37_01_poses_slow_walk.npz --out-dir data/retarget_ready --target-fps 60
+```
+Converts your obtained 37_01.npz file renamed as 37_01_poses_slow_walk inside of data/selected_data/Walk into cleaner retarget-ready format at 60FPS
+
+### 3
+```powershell
+python scripts/g1_map_walk_offline_pass.py data/retarget_ready/Walk/37_01_poses_slow_walk_retarget_ready.npz --g1-dump-json outputs/g1_asset_dump.json --out-dir data/mapped
+```
+Converts retarget-ready AMASS motion into minimal Unitree G1 joint targets using the G1 asset dump and soft joint limits.
+
+### 4
+```powershell
+python scripts/g1_record_bc_reference_demos.py data/mapped/Walk/37_01_poses_slow_walk_retarget_ready_g1_first_pass.npz --out-hdf5 data/bc_dataset_demonstrations/g1_walk_reference_bc_1024_regular.hdf5 --num-demos 1024 --include-phase --obs-noise-std 0.005 --action-noise-std 0.0 --speed-jitter 0.05 --seed 0
+```
+This creates the robomimic-style HDF5 dataset and JSON metadata used by the BC prior. Specifically the metadata from the JSON is used for the "G1BCPPOEnv direct environment" for playback. It tells the environment script information such as the final policy G1 joint order, action lower and upper bounds and how to denormalize BC prior output.
+
+It also includes the location of the mapped .npz file generated in step 3 for reference.
+
+
+## Evaluating Policy Controller & Running Experiments
+
+### Run the Final Stable Policy Controller used in the experiments:
+
+```powershell
+python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
+```
+
+TO-DO: Put the key scripts here not much context
+
+
+## Isaac Lab NVIDIA external project template - Default Recommendation as provided by NVIDIA
 
 ## Overview
 
@@ -150,7 +304,7 @@ Some examples of packages that can likely be excluded are:
 ...
 ```
 
-## Scripts
+## All Project Scripts
 
 ### Dump Unitree G1 Asset Information - g1_dump_asset_info.py
 
@@ -384,9 +538,25 @@ training_evidence\tensorboard_runs
 
 This command plays back a trained PPO checkpoint in Isaac Lab. Use this after training to visually inspect the final locomotion policy without fault injection.
 
-Replace `<RUN_FOLDER>` and `<CHECKPOINT>` with the actual log folder and model checkpoint created during training.
+Replace `<RUN_FOLDER>` and `<CHECKPOINT>` with the actual log folder and model checkpoint created during training. 
+
+However, the actual configuration values including rewards and penalty terms must match during playback the same way as it was trained. If you are planning to run the final policy checkpoint used for the experiments, "model_11992.pt" please keep the "g1_bc_ppo_env.py" file as provided with its configuration terms.
+
+To check the final stable BC-Policy controller used for the experiments within the study please run this from here:
+
+```text
+PPO_RL_policy_checkpoints\PPO_WALK_GOOD_FINAL\model_11992.pt
+```
 
 #### Run Command
 
 ```powershell
 python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint logs/rsl_rl/<RUN_FOLDER>/<CHECKPOINT>.pt
+```
+
+OR DIRECT FINAL POLICY CONTROLLER COMMAND:
+
+```powershell
+python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
+```
+
