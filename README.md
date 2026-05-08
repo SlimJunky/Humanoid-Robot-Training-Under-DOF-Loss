@@ -322,7 +322,7 @@ Some examples of packages that can likely be excluded are:
 A detailed script-by-script guide is provided here:
 
 ```text
-docs/scripts.md
+docs/SCRIPTS.md
 ```
 
 ## Third-Party Data and Software Citations
