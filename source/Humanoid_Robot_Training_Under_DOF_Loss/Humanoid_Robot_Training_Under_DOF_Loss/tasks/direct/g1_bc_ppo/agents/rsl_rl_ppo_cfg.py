@@ -1,6 +1,9 @@
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticCfg, RslRlPpoAlgorithmCfg
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
 '''PPO configuration class for the RL algorithm used with my g1 environment. Follows same structure as RS-RL PPO used in G1 locomotion configs
 where the runner contains num_steps_per_env and max_iterations as actor/critic MLP configuration and around PPO algorithm settings specified in dissertation paper'''
 @configclass

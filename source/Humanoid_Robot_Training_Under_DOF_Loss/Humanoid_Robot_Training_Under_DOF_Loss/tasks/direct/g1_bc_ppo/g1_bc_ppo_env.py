@@ -100,8 +100,8 @@ class G1BCPPOEnvCfg(DirectRLEnvCfg):
 
 
     # File locations default
-    bc_policy_path: str = r"bc_walking_policy_checkpoints\g1_bc_walk\g1_model_epoch_81_best.pt"
-    bc_meta_json: str = r"bc_config_files\g1_bc_runtime_public.json"
+    bc_policy_path: str = r"bc_walking_policy_checkpoints/g1_bc_walk/g1_model_epoch_81_best.pt"
+    bc_meta_json: str = r"bc_config_files/g1_bc_runtime_public.json"
 
     # Folder searched automatically for mapped first-pass motion files.
     mapped_walk_dir: str = r"data\mapped\Walk" 
