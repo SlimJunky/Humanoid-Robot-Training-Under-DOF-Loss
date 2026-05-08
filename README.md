@@ -113,6 +113,12 @@ python scripts/list_envs.py
 
 ## Obtaining AMASS SMPL+H Motion Capture Data
 
+Please go to the official AMASS website:
+
+```text
+https://amass.is.tue.mpg.de/index.html
+```
+
 
 ## Minimum Data Processing Pipeline Required
 
@@ -164,7 +170,7 @@ It also includes the location of the mapped .npz file generated in step 3 for re
 python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
 ```
 
-TO-DO: Put the key scripts here not much context
+TO-DO: Put the key scripts here not much context. Scripts for experiment especially
 
 
 ## Isaac Lab NVIDIA external project template - Default Recommendation as provided by NVIDIA
@@ -304,7 +310,7 @@ Some examples of packages that can likely be excluded are:
 ...
 ```
 
-## All Project Scripts
+## Scripts
 
 ### Dump Unitree G1 Asset Information - g1_dump_asset_info.py
 
