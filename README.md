@@ -115,10 +115,17 @@ python scripts/list_envs.py
 
 Please go to the official AMASS website:
 
-
 https://amass.is.tue.mpg.de/index.html
 
+Then please register your account and accept the license / terms of service when obtaining the data following the BSD 3-Clause. 
 
+Go into the Downloads section and look for the CMU dataset. Then download the "SMPL+H G" and accept the license. Then unpack the CMU.tar.bz2 zip.
+
+Then look into this directory and obtain this .npz file:
+
+```text
+37\37_01_poses.npz
+```
 
 ## Minimum Data Processing Pipeline Required
 
@@ -565,4 +572,49 @@ OR DIRECT FINAL POLICY CONTROLLER COMMAND:
 ```powershell
 python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
 ```
+
+
+## Third-Party Data and Software Citations
+
+This repository uses several third-party datasets, tools, and simulation frameworks. Please cite or acknowledge the following sources when using or extending this project:
+
+```text
+* AMASS: Archive of Motion Capture as Surface Shapes
+* CMU Graphics Lab Motion Capture Database
+* NVIDIA Isaac Sim
+* NVIDIA Isaac Lab
+* Robomimic
+* PyTorch
+* RSL-RL, where relevant for PPO training
+```
+
+This repository cites all references within this file:
+
+```text
+docs\references.bib
+```
+
+### Motion Capture Data
+
+The motion-capture data used in this project was obtained from the AMASS dataset, using SMPL+H motion files derived from the CMU Graphics Lab Motion Capture Database.
+
+Please cite AMASS:
+
+```bibtex
+@inproceedings{AMASS:2019,
+  title={AMASS: Archive of Motion Capture as Surface Shapes},
+  author={Mahmood, Naureen and Ghorbani, Nima and F. Troje, Nikolaus and Pons-Moll, Gerard and Black, Michael J.},
+  booktitle={The IEEE International Conference on Computer Vision (ICCV)},
+  year={2019},
+  month={Oct},
+  url={https://amass.is.tue.mpg.de},
+  month_numeric={10}
+}
+```
+### Acknowledgements
+
+CMU MoCap Acknowledgment:
+
+The data used in this project was obtained from mocap.cs.cmu.edu.
+The database was created with funding from NSF EIA-0196217.
 
