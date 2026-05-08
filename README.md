@@ -115,9 +115,9 @@ python scripts/list_envs.py
 
 Please go to the official AMASS website:
 
-```text
+
 https://amass.is.tue.mpg.de/index.html
-```
+
 
 
 ## Minimum Data Processing Pipeline Required
