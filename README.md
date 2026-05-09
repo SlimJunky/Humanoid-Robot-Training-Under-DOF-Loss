@@ -171,6 +171,14 @@ It also includes the location of the mapped .npz file generated in step 3 for re
 
 ## Evaluating Policy Controller & Running Experiments:
 
+### Run the Final Stable Policy Controller used in the experiments by itself:
+
+```powershell
+python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
+```
+
+### Run the experiments against Final Stable Policy Controller:
+
 Please find the provided script in:
 
 ```text
@@ -199,31 +207,23 @@ torque  = reduces the selected joint torque limit after the chosen fault time. T
 This runs the final PPO policy with no injected fault. The --fault_time_s 2.0 value is still used as a reference split point for before/after metrics:
 
 ```powershell
-python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode none --fault_time_s 2.0 --out_csv results_experiment/nominal_baseline.csv --headless --disable_fabric --debug
+python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode none --fault_time_s 2.0 --out_csv results_experiment/g1_policy_eval.csv --headless --disable_fabric --debug
 ```
 
 This runs the final PPO policy and locks the chosen joint after 2.0 seconds. This example locks the left knee joint. 
 
 ```powershell
-python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode lock --fault_joint left_knee_joint --fault_time_s 2.0 --lock_epsilon 0.001 --out_csv results_experiment/left_knee_lock.csv --headless --disable_fabric --debug
+python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode lock --fault_joint left_knee_joint --fault_time_s 2.0 --lock_epsilon 0.001 --out_csv results_experiment/g1_policy_eval.csv --headless --disable_fabric --debug
 ```
 
 This runs the final PPO policy and reduces the torque limit of the chosen joint after 2.0 seconds. A --torque_scale of 0.0 represents complete torque loss, while 0.5 would represent 50% available torque.
 
 ```powershell
-python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode torque --fault_joint left_knee_joint --torque_scale 0.0 --fault_time_s 2.0 --out_csv results_experiment/left_knee_torque000.csv --headless --disable_fabric --debug
+python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode torque --fault_joint left_knee_joint --torque_scale 0.0 --fault_time_s 2.0 --out_csv results_experiment/g1_policy_eval.csv --headless --disable_fabric --debug
 ```
 All experiment results that were run as part of the study are in "g1_policy_eval.csv" for raw episodic data & "g1_policy_eval_summary.csv". Each run of the command is appending the results onto these csv files.
 
 For visual debugging run any of these commands with --episodes 1, remove --headless and make sure to add --debug. Visual runs are placed into "results_experiment\g1_policy_eval_visual.csv" for raw episodic data & "results_experiment\g1_policy_eval_visual_summary.csv" for summarized data during these runs.
-
-### Run the Final Stable Policy Controller used in the experiments:
-
-```powershell
-python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
-```
-
-TO-DO: Put the key scripts here not much context. Scripts for experiment especially
 
 
 ## Isaac Lab NVIDIA external project template - Default Recommendation as provided by NVIDIA
