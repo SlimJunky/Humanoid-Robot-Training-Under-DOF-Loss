@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+# Copyright (c) 2026, Mikolaj Wyrzykowski
+# SPDX-License-Identifier: BSD-3-Clause
+
+'''Runs simulation direct environment and captures key metrics for a selected number of episodes. Then places it into a raw data CSV for specific metrics and also
+A mean summary of these metrics for that specific type of experiment run. This is stored in results_experiment folder and then analyzed as part of the study.
+
+For each episode the intention of this script is to start the G1 Walking Policy Normally. Then run trained PPO exactly like play.py inference or playback. 
+Then at t = 2.0 seconds inject a selected fault. Continue running the episode until the robot falls or reaches 8 seconds.
+Save one row of metrics for that episode. Then average amount of episodes for that run and save one summary average row for the condition.
+
+'''
 import argparse
 from pathlib import Path
 
@@ -10,23 +21,24 @@ import cli_args
 
 parser = argparse.ArgumentParser(description="Evaluate G1 PPO walking policy with clean metric CSV logging.")
 
-# Normal RSL-RL / Isaac Lab args
+# Regular environment args
 parser.add_argument("--task", type=str, default="Isaac-G1-BC-PPO-Walk-Direct-v0")
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--episodes", type=int, default=10)
-parser.add_argument("--out_csv", type=str, default="results/g1_policy_eval.csv")
+parser.add_argument("--out_csv", type=str, default="results_experiment/g1_policy_eval.csv")
+parser.add_argument("--summary_csv", type=str, default="", help="Optional summary CSV path. If empty, one is created next to out_csv.")
 parser.add_argument("--robot_name", type=str, default="robot")
 parser.add_argument("--debug", action="store_true")
 parser.add_argument("--debug_interval_s", type=float, default=0.5)
 
-# Fault args
+# Fault control args
 parser.add_argument("--fault_mode", type=str, default="none", choices=["none", "torque", "lock"])
 parser.add_argument("--fault_joint", type=str, default="")
 parser.add_argument("--fault_time_s", type=float, default=2.0)
 parser.add_argument("--torque_scale", type=float, default=1.0, help="0.5 = 50 percent torque, 0.0 = no torque")
 parser.add_argument("--lock_epsilon", type=float, default=0.001, help="Small joint-limit band around locked angle")
 
-# Contact / metric heuristics
+# Contact heuristics kept at default
 parser.add_argument("--foot_contact_height", type=float, default=0.08)
 parser.add_argument("--fall_height", type=float, default=0.45)
 
@@ -110,6 +122,66 @@ CSV_FIELDS = [
     "fault_joint_pos_final_rad",
     "fault_joint_vel_mean_after_fault_radps",
     "fault_joint_vel_max_after_fault_radps",
+    "torque_source",
+    "mean_abs_joint_torque_nm",
+    "max_abs_joint_torque_nm",
+    "mean_abs_joint_torque_after_fault_nm",
+    "max_abs_joint_torque_after_fault_nm",
+    "torque_saturation_fraction",
+    "torque_saturation_fraction_after_fault",
+    "fault_joint_torque_mean_after_fault_nm",
+    "fault_joint_torque_max_after_fault_nm",
+    "total_abs_mechanical_work_j",
+    "mean_abs_mechanical_power_w",
+    "total_abs_mechanical_work_after_fault_j",
+    "mean_abs_mechanical_power_after_fault_w",
+    "work_per_meter_after_fault_j_per_m",
+    "fault_joint_abs_work_after_fault_j",
+]
+
+SUMMARY_FIELDS = [
+    "task",
+    "checkpoint",
+    "fault_mode",
+    "fault_joint",
+    "fault_time_s",
+    "torque_scale",
+    "n_episodes",
+    "fall_rate",
+    "timeout_rate",
+    "success_rate",
+    "mean_episode_duration_s",
+    "mean_time_to_fall_s",
+    "mean_forward_distance_m",
+    "mean_distance_before_fault_m",
+    "mean_distance_after_fault_m",
+    "mean_forward_vel_before_fault_mps",
+    "mean_forward_vel_after_fault_mps",
+    "mean_root_height_after_fault_m",
+    "mean_min_root_height_after_fault_m",
+    "mean_max_tilt_after_fault",
+    "mean_max_lateral_drift_m",
+    "mean_base_ang_vel_norm",
+    "mean_left_foot_clearance_max_m",
+    "mean_right_foot_clearance_max_m",
+    "mean_left_contact_fraction",
+    "mean_right_contact_fraction",
+    "mean_left_contact_transitions",
+    "mean_right_contact_transitions",
+    "mean_action_norm",
+    "mean_action_rate",
+    "mean_fault_joint_vel_after_fault_radps",
+    "mean_fault_joint_pos_change_after_fault_rad",
+    "mean_abs_joint_torque_after_fault_nm",
+    "max_abs_joint_torque_after_fault_nm",
+    "mean_torque_saturation_fraction_after_fault",
+    "mean_fault_joint_torque_after_fault_nm",
+    "max_fault_joint_torque_after_fault_nm",
+    "mean_total_abs_mechanical_work_j",
+    "mean_total_abs_mechanical_work_after_fault_j",
+    "mean_abs_mechanical_power_after_fault_w",
+    "mean_work_per_meter_after_fault_j_per_m",
+    "mean_fault_joint_abs_work_after_fault_j",
 ]
 
 
@@ -244,6 +316,20 @@ def append_csv(path: str, row: dict):
             writer.writeheader()
         writer.writerow({k: row.get(k, "") for k in CSV_FIELDS})
 
+''' Returns torque joint sensor for env 0, shape [num_joints] from possible Isaac Lab names. If these dont exist then CSV will be blank for this rather than crash'''
+def get_joint_torque_tensor(robot):
+
+    if hasattr(robot.data, "applied_torque"):
+        return robot.data.applied_torque.select(0, 0).detach(), "applied_torque"
+
+    if hasattr(robot.data, "computed_torque"):
+        return robot.data.computed_torque.select(0, 0).detach(), "computed_torque"
+
+    if hasattr(robot.data, "joint_effort"):
+        return robot.data.joint_effort.select(0, 0).detach(), "joint_effort"
+
+    return None, ""
+
 
 class EpisodeMetricBuffer:
     def __init__(self):
@@ -272,6 +358,14 @@ class EpisodeMetricBuffer:
         self.fault_joint_pos = []
         self.fault_joint_vel = []
         self.fault_joint_pos_at_fault = None
+        self.torque_source = ""
+        self.mean_abs_joint_torque = []
+        self.max_abs_joint_torque = []
+        self.torque_saturation_fraction = []
+        self.abs_mechanical_power = []
+        self.abs_mechanical_work_step = []
+        self.fault_joint_torque = []
+        self.fault_joint_abs_work_step = []
 
     def update(
         self,
@@ -335,16 +429,77 @@ class EpisodeMetricBuffer:
         if len(contact_list) < 2:
             return 0
         return sum(1 for a, b in zip(contact_list[:-1], contact_list[1:]) if a != b)
+    
+    def update_action_metrics(self, actions):
+        a = actions.detach().flatten().float()
+        self.action_norm.append(float(torch.linalg.norm(a).item()))
 
-    def finalize(
-        self,
-        task: str,
-        checkpoint: str,
-        episode: int,
-        fault_mode: str,
-        fault_joint: str,
-        fault_time_s: float,
-        torque_scale: float,
+        if self.prev_action is not None:
+            da = a - self.prev_action
+            self.action_rate.append(float(torch.linalg.norm(da).item()))
+
+        self.prev_action = a.clone()
+
+    def update_fault_joint_metrics(self, robot, fault_joint_id: int | None, fault_applied: bool, just_applied_fault: bool,):
+        if fault_joint_id is None:
+            return
+
+        q = float(robot.data.joint_pos[0, fault_joint_id].detach().item())
+        qd = float(robot.data.joint_vel[0, fault_joint_id].detach().item())
+
+        self.fault_joint_pos.append(q)
+        self.fault_joint_vel.append(qd)
+
+        if just_applied_fault:
+            self.fault_joint_pos_at_fault = q
+
+    def update_torque_energy_metrics(self, robot, step_dt: float, fault_joint_id: int | None):
+        torque, source = get_joint_torque_tensor(robot)
+
+        if torque is None:
+            return
+
+        self.torque_source = source
+
+        joint_vel = robot.data.joint_vel[0].detach()
+
+        # Make sure shapes match in case Isaac returns a different view just a csanity check
+        n = min(torque.numel(), joint_vel.numel())
+        torque = torque[:n]
+        joint_vel = joint_vel[:n]
+
+        abs_torque = torch.abs(torque)
+
+        self.mean_abs_joint_torque.append(float(torch.mean(abs_torque).item()))
+        self.max_abs_joint_torque.append(float(torch.max(abs_torque).item()))
+
+        # Estimated absolute mechanical power for energy usage within the simulation
+        # P = torque * angular velocity, summed across joints.
+        abs_power_per_joint = torch.abs(torque * joint_vel)
+        abs_power_total = float(torch.sum(abs_power_per_joint).item())
+
+        self.abs_mechanical_power.append(abs_power_total)
+        self.abs_mechanical_work_step.append(abs_power_total * float(step_dt))
+
+        # Torque saturation fraction is the fraction of valid joints close to their current effort limit.
+        if hasattr(robot.data, "joint_effort_limits"):
+            effort_limits = torch.abs(robot.data.joint_effort_limits[0].detach())[:n]
+            valid = effort_limits > 1.0e-6
+
+            if torch.any(valid):
+                saturation = abs_torque[valid] >= (0.98 * effort_limits[valid])
+                self.torque_saturation_fraction.append(float(torch.mean(saturation.float()).item()))
+
+        # Fault-joint-specific torque and work.
+        if fault_joint_id is not None and fault_joint_id < n:
+            fj_torque = float(torque[fault_joint_id].item())
+            fj_vel = float(joint_vel[fault_joint_id].item())
+            fj_abs_power = abs(fj_torque * fj_vel)
+
+            self.fault_joint_torque.append(fj_torque)
+            self.fault_joint_abs_work_step.append(fj_abs_power * float(step_dt))
+
+    def finalize(self, task: str, checkpoint: str, episode: int, fault_mode: str, fault_joint: str, fault_time_s: float, torque_scale: float,
         fault_applied: bool,
         fault_applied_time_s,
         fault_lock_angle,
@@ -363,6 +518,47 @@ class EpisodeMetricBuffer:
 
         if self.root_y and self.start_y is not None:
             max_lateral_drift = max(abs(y - self.start_y) for y in self.root_y)
+        
+        fault_t = float(fault_time_s)
+
+        before_indices = [i for i, t in enumerate(self.t) if t < fault_t]
+        after_indices = [i for i, t in enumerate(self.t) if t >= fault_t]
+
+        def values_at(values, indices):
+            return [values[i] for i in indices if i < len(values)]
+
+        x_before = values_at(self.root_x, before_indices)
+        x_after = values_at(self.root_x, after_indices)
+
+        distance_before_fault = ""
+        distance_after_fault = ""
+
+        if x_before:
+            distance_before_fault = x_before[-1] - x_before[0]
+
+        if x_after:
+            distance_after_fault = x_after[-1] - x_after[0]
+
+        vx_before = values_at(self.vx_b, before_indices)
+        vx_after = values_at(self.vx_b, after_indices)
+        z_after = values_at(self.root_z, after_indices)
+        tilt_after = values_at(self.tilt, after_indices)
+
+        torque_after = values_at(self.mean_abs_joint_torque, after_indices)
+        max_torque_after = values_at(self.max_abs_joint_torque, after_indices)
+        saturation_after = values_at(self.torque_saturation_fraction, after_indices)
+        power_after = values_at(self.abs_mechanical_power, after_indices)
+        work_after_steps = values_at(self.abs_mechanical_work_step, after_indices)
+        fault_joint_torque_after = values_at(self.fault_joint_torque, after_indices)
+        fault_joint_work_after_steps = values_at(self.fault_joint_abs_work_step, after_indices)
+
+        total_work = sum(self.abs_mechanical_work_step) if self.abs_mechanical_work_step else ""
+        total_work_after = sum(work_after_steps) if work_after_steps else ""
+
+        work_per_meter_after = ""
+        if total_work_after != "" and distance_after_fault != "":
+            if abs(float(distance_after_fault)) > 1.0e-6:
+                work_per_meter_after = float(total_work_after) / abs(float(distance_after_fault))
 
         return {
             "task": task,
@@ -405,6 +601,35 @@ class EpisodeMetricBuffer:
             "left_knee_angle_max_rad": fmax(self.left_knee),
             "right_knee_angle_mean_rad": fmean(self.right_knee),
             "right_knee_angle_max_rad": fmax(self.right_knee),
+            "distance_before_fault_m": distance_before_fault,
+            "distance_after_fault_m": distance_after_fault,
+            "mean_forward_vel_before_fault_mps": fmean(vx_before),
+            "mean_forward_vel_after_fault_mps": fmean(vx_after),
+            "mean_root_height_after_fault_m": fmean(z_after),
+            "min_root_height_after_fault_m": fmin(z_after),
+            "max_tilt_after_fault": fmax(tilt_after),
+            "mean_action_norm": fmean(self.action_norm),
+            "max_action_norm": fmax(self.action_norm),
+            "mean_action_rate": fmean(self.action_rate),
+            "fault_joint_pos_at_fault_rad": self.fault_joint_pos_at_fault if self.fault_joint_pos_at_fault is not None else "",
+            "fault_joint_pos_final_rad": self.fault_joint_pos[-1] if self.fault_joint_pos else "",
+            "fault_joint_vel_mean_after_fault_radps": fmean(values_at(self.fault_joint_vel, after_indices)),
+            "fault_joint_vel_max_after_fault_radps": fmax([abs(v) for v in values_at(self.fault_joint_vel, after_indices)]),
+            "torque_source": self.torque_source,
+            "mean_abs_joint_torque_nm": fmean(self.mean_abs_joint_torque),
+            "max_abs_joint_torque_nm": fmax(self.max_abs_joint_torque),
+            "mean_abs_joint_torque_after_fault_nm": fmean(torque_after),
+            "max_abs_joint_torque_after_fault_nm": fmax(max_torque_after),
+            "torque_saturation_fraction": fmean(self.torque_saturation_fraction),
+            "torque_saturation_fraction_after_fault": fmean(saturation_after),
+            "fault_joint_torque_mean_after_fault_nm": fmean([abs(v) for v in fault_joint_torque_after]),
+            "fault_joint_torque_max_after_fault_nm": fmax([abs(v) for v in fault_joint_torque_after]),
+            "total_abs_mechanical_work_j": total_work,
+            "mean_abs_mechanical_power_w": fmean(self.abs_mechanical_power),
+            "total_abs_mechanical_work_after_fault_j": total_work_after,
+            "mean_abs_mechanical_power_after_fault_w": fmean(power_after),
+            "work_per_meter_after_fault_j_per_m": work_per_meter_after,
+            "fault_joint_abs_work_after_fault_j": sum(fault_joint_work_after_steps) if fault_joint_work_after_steps else "",
         }
 
 
@@ -413,14 +638,22 @@ class FaultController:
         self.robot = robot
         self.args = args
         self.device = robot.device
-        self.joint_id = None
+        self.joint_id: int | None = None
         self.original_effort_limits = None
         self.original_pos_limits = None
         self.original_vel_limits = None
 
         if args.fault_mode != "none":
-            self.joint_id = find_index(joint_names, args.fault_joint, required=True)
-            print(f"[INFO] Fault joint '{args.fault_joint}' resolved to index {self.joint_id}: {joint_names[self.joint_id]}")
+            resolved_joint_id = find_index(joint_names, args.fault_joint, required=True)
+
+        if resolved_joint_id is None:
+            raise RuntimeError(f"Could not resolve fault joint: {args.fault_joint}")
+
+        self.joint_id = int(resolved_joint_id)
+        print(
+        f"Fault joint '{args.fault_joint}' resolved to index "
+        f"{self.joint_id}: {joint_names[self.joint_id]}"
+        )
 
         if hasattr(robot.data, "joint_effort_limits"):
             self.original_effort_limits = robot.data.joint_effort_limits.clone()
@@ -435,19 +668,20 @@ class FaultController:
         if self.joint_id is None:
             return
 
-        jid = [self.joint_id]
+        jid_int = int(self.joint_id)
+        jid_list = [jid_int]
 
         if self.original_effort_limits is not None:
-            effort = self.original_effort_limits[:, jid]
-            self.robot.write_joint_effort_limit_to_sim(effort, joint_ids=jid)
+            effort = self.original_effort_limits[:, jid_int:jid_int + 1].clone()
+            self.robot.write_joint_effort_limit_to_sim(effort, joint_ids=jid_list)
 
         if self.original_pos_limits is not None and hasattr(self.robot, "write_joint_position_limit_to_sim"):
-            pos_lim = self.original_pos_limits[:, jid, :]
-            self.robot.write_joint_position_limit_to_sim(pos_lim, joint_ids=jid, warn_limit_violation=False)
+            pos_lim = self.original_pos_limits[:, jid_int:jid_int + 1, :].clone()
+            self.robot.write_joint_position_limit_to_sim(pos_lim, joint_ids=jid_list, warn_limit_violation=False)
 
         if self.original_vel_limits is not None:
-            vel_lim = self.original_vel_limits[:, jid]
-            self.robot.write_joint_velocity_limit_to_sim(vel_lim, joint_ids=jid)
+            vel_lim = self.original_vel_limits[:, jid_int:jid_int + 1].clone()
+            self.robot.write_joint_velocity_limit_to_sim(vel_lim, joint_ids=jid_list)
 
     def apply_if_needed(self, t_s: float, already_applied: bool):
         if self.args.fault_mode == "none" or already_applied:
@@ -455,14 +689,18 @@ class FaultController:
 
         if t_s < self.args.fault_time_s:
             return already_applied, None
+        
+        if self.joint_id is None:
+            raise RuntimeError("fault_mode is enabled, but no fault joint index was resolved.")
 
-        jid = [self.joint_id]
+        jid_int = int(self.joint_id)
+        jid = [jid_int]
 
         if self.args.fault_mode == "torque":
             if self.original_effort_limits is None:
                 raise RuntimeError("robot.data.joint_effort_limits not available, cannot apply torque fault.")
 
-            scaled = self.original_effort_limits[:, jid] * float(self.args.torque_scale)
+            scaled = self.original_effort_limits[:, jid_int:jid_int + 1].clone() * float(self.args.torque_scale)
             self.robot.write_joint_effort_limit_to_sim(scaled, joint_ids=jid)
 
             print(
@@ -475,7 +713,7 @@ class FaultController:
             if not hasattr(self.robot, "write_joint_position_limit_to_sim"):
                 raise RuntimeError("robot.write_joint_position_limit_to_sim not available, cannot apply lock fault.")
 
-            lock_angle = float(self.robot.data.joint_pos[0, self.joint_id].detach().item())
+            lock_angle = float(self.robot.data.joint_pos[0, jid_int].detach().item())
             eps = float(self.args.lock_epsilon)
 
             limits = torch.tensor([[[lock_angle - eps, lock_angle + eps]]], device=self.device)
@@ -514,13 +752,21 @@ def main():
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
 
     print(f"Loading checkpoint: {resume_path}")
-    print(f"Writing CSV results to: {args_cli.out_csv}")
+    print(f"Writing raw episode CSV results to: {args_cli.out_csv}")
 
+    # Makes the Direct RL task here from Isaac-G1-BC-PPO-Walk-Direct-v0
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
     base_env = env.unwrapped
 
     robot = get_scene_robot(base_env, args_cli.robot_name)
     joint_names, body_names = get_names(robot)
+
+    # Fast torque data check for robot
+    print("Torque data availability:")
+    print("  applied_torque:", hasattr(robot.data, "applied_torque"))
+    print("  computed_torque:", hasattr(robot.data, "computed_torque"))
+    print("  joint_effort:", hasattr(robot.data, "joint_effort"))
+    print("  joint_effort_limits:", hasattr(robot.data, "joint_effort_limits"))
 
     print("Available joint names:")
     for j in joint_names:
@@ -545,6 +791,7 @@ def main():
 
     env = RslRlVecEnvWrapper(env)
 
+    # Load policy checkpoint and loads saved weights
     runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
     runner.load(resume_path)
     policy = runner.get_inference_policy(device=env.device)
@@ -556,6 +803,9 @@ def main():
     fault_controller = FaultController(robot, joint_names, args_cli)
 
     obs = reset_env_get_obs(env)
+
+    episode_rows = []
+
 
     for ep in range(args_cli.episodes):
         fault_controller.restore()
@@ -577,13 +827,19 @@ def main():
             t_s = step * step_dt
 
             fault_applied_now, lock_angle_now = fault_controller.apply_if_needed(t_s, fault_applied)
+            just_applied_fault = False
+
             if fault_applied_now and not fault_applied:
                 fault_applied = True
                 fault_applied_time_s = t_s
                 fault_lock_angle = lock_angle_now
+                just_applied_fault = True
+
+
 
             with torch.inference_mode():
                 actions = policy(obs)
+                metrics.update_action_metrics(actions)
                 obs, rewards, dones, extras = env.step(actions)
 
             metrics.update(
@@ -594,6 +850,19 @@ def main():
                 left_knee_joint_id=left_knee_joint_id,
                 right_knee_joint_id=right_knee_joint_id,
                 foot_contact_height=args_cli.foot_contact_height,
+            )
+
+            metrics.update_fault_joint_metrics(
+                robot=robot,
+                fault_joint_id=fault_controller.joint_id,
+                fault_applied=fault_applied,
+                just_applied_fault=just_applied_fault,
+            )
+
+            metrics.update_torque_energy_metrics(
+                robot=robot,
+                step_dt=step_dt,
+                fault_joint_id=fault_controller.joint_id,
             )
 
             done = unwrap_scalar_bool(dones)
@@ -636,6 +905,7 @@ def main():
         )
 
         append_csv(args_cli.out_csv, row)
+        episode_rows.append(row)
 
         print(
             f"[RESULT] ep={ep + 1} "
@@ -645,6 +915,138 @@ def main():
             f"mean_vx={row['mean_forward_vel_b_mps']} "
             f"min_z={row['min_root_height_m']}"
         )
+
+
+
+    def to_float_or_none(value):
+        if value == "" or value is None:
+            return None
+        try:
+            value = float(value)
+            if math.isnan(value):
+                return None
+            return value
+        except Exception:
+            return None
+
+
+    def mean_of_rows(rows, key):
+        vals = [to_float_or_none(r.get(key, "")) for r in rows]
+        vals = [v for v in vals if v is not None]
+        return statistics.fmean(vals) if vals else ""
+
+
+    def sum_of_rows(rows, key):
+        vals = [to_float_or_none(r.get(key, "")) for r in rows]
+        vals = [v for v in vals if v is not None]
+        return sum(vals) if vals else 0.0
+
+
+    def append_summary_csv(path: str, row: dict):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        file_exists = Path(path).exists()
+
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow({k: row.get(k, "") for k in SUMMARY_FIELDS})
+
+
+    def make_summary(rows: list[dict]) -> dict:
+        if not rows:
+            return {}
+
+        n = len(rows)
+
+        fault_pos_changes = []
+        for r in rows:
+            at_fault = to_float_or_none(r.get("fault_joint_pos_at_fault_rad", ""))
+            final = to_float_or_none(r.get("fault_joint_pos_final_rad", ""))
+            if at_fault is not None and final is not None:
+                fault_pos_changes.append(abs(final - at_fault))
+
+        summary = {
+            "task": rows[0].get("task", ""),
+            "checkpoint": rows[0].get("checkpoint", ""),
+            "fault_mode": rows[0].get("fault_mode", ""),
+            "fault_joint": rows[0].get("fault_joint", ""),
+            "fault_time_s": rows[0].get("fault_time_s", ""),
+            "torque_scale": rows[0].get("torque_scale", ""),
+            "n_episodes": n,
+
+            "fall_rate": sum_of_rows(rows, "fall") / n,
+            "timeout_rate": sum_of_rows(rows, "timeout") / n,
+            "success_rate": sum_of_rows(rows, "success_no_fall") / n,
+
+            "mean_episode_duration_s": mean_of_rows(rows, "episode_duration_s"),
+            "mean_time_to_fall_s": mean_of_rows(rows, "time_to_fall_s"),
+            "mean_forward_distance_m": mean_of_rows(rows, "forward_distance_m"),
+
+            "mean_distance_before_fault_m": mean_of_rows(rows, "distance_before_fault_m"),
+            "mean_distance_after_fault_m": mean_of_rows(rows, "distance_after_fault_m"),
+            "mean_forward_vel_before_fault_mps": mean_of_rows(rows, "mean_forward_vel_before_fault_mps"),
+            "mean_forward_vel_after_fault_mps": mean_of_rows(rows, "mean_forward_vel_after_fault_mps"),
+
+            "mean_root_height_after_fault_m": mean_of_rows(rows, "mean_root_height_after_fault_m"),
+            "mean_min_root_height_after_fault_m": mean_of_rows(rows, "min_root_height_after_fault_m"),
+            "mean_max_tilt_after_fault": mean_of_rows(rows, "max_tilt_after_fault"),
+
+            "mean_max_lateral_drift_m": mean_of_rows(rows, "max_lateral_drift_m"),
+            "mean_base_ang_vel_norm": mean_of_rows(rows, "mean_base_ang_vel_norm"),
+
+            "mean_left_foot_clearance_max_m": mean_of_rows(rows, "left_foot_clearance_max_m"),
+            "mean_right_foot_clearance_max_m": mean_of_rows(rows, "right_foot_clearance_max_m"),
+            "mean_left_contact_fraction": mean_of_rows(rows, "left_contact_fraction"),
+            "mean_right_contact_fraction": mean_of_rows(rows, "right_contact_fraction"),
+            "mean_left_contact_transitions": mean_of_rows(rows, "left_contact_transitions"),
+            "mean_right_contact_transitions": mean_of_rows(rows, "right_contact_transitions"),
+
+            "mean_action_norm": mean_of_rows(rows, "mean_action_norm"),
+            "mean_action_rate": mean_of_rows(rows, "mean_action_rate"),
+
+            "mean_fault_joint_vel_after_fault_radps": mean_of_rows(rows, "fault_joint_vel_mean_after_fault_radps"),
+            "mean_fault_joint_pos_change_after_fault_rad": statistics.fmean(fault_pos_changes) if fault_pos_changes else "",
+
+            "mean_abs_joint_torque_after_fault_nm": mean_of_rows(rows, "mean_abs_joint_torque_after_fault_nm"),
+            "max_abs_joint_torque_after_fault_nm": mean_of_rows(rows, "max_abs_joint_torque_after_fault_nm"),
+            "mean_torque_saturation_fraction_after_fault": mean_of_rows(rows, "torque_saturation_fraction_after_fault"),
+            "mean_fault_joint_torque_after_fault_nm": mean_of_rows(rows, "fault_joint_torque_mean_after_fault_nm"),
+            "max_fault_joint_torque_after_fault_nm": mean_of_rows(rows, "fault_joint_torque_max_after_fault_nm"),
+
+            "mean_total_abs_mechanical_work_j": mean_of_rows(rows, "total_abs_mechanical_work_j"),
+            "mean_total_abs_mechanical_work_after_fault_j": mean_of_rows(rows, "total_abs_mechanical_work_after_fault_j"),
+
+            "mean_abs_mechanical_power_after_fault_w": mean_of_rows(rows, "mean_abs_mechanical_power_after_fault_w"),
+            "mean_work_per_meter_after_fault_j_per_m": mean_of_rows(rows, "work_per_meter_after_fault_j_per_m"),
+            "mean_fault_joint_abs_work_after_fault_j": mean_of_rows(rows, "fault_joint_abs_work_after_fault_j"),
+        }
+
+        return summary
+
+    summary_csv = args_cli.summary_csv
+
+    if not summary_csv:
+        out_path = Path(args_cli.out_csv)
+        summary_csv = str(out_path.with_name(out_path.stem + "_summary" + out_path.suffix))
+
+    summary = make_summary(episode_rows)
+    append_summary_csv(summary_csv, summary)
+
+    print("\n[SUMMARY]")
+    print(f"  Episodes: {summary['n_episodes']}")
+    print(f"  Fault mode: {summary['fault_mode']}")
+    print(f"  Fault joint: {summary['fault_joint']}")
+    print(f"  Torque scale: {summary['torque_scale']}")
+    print(f"  Fall rate: {summary['fall_rate']:.3f}")
+    print(f"  Timeout rate: {summary['timeout_rate']:.3f}")
+    print(f"  Success rate: {summary['success_rate']:.3f}")
+    print(f"  Mean duration: {summary['mean_episode_duration_s']}")
+    print(f"  Mean distance after fault: {summary['mean_distance_after_fault_m']}")
+    print(f"  Mean forward velocity after fault: {summary['mean_forward_vel_after_fault_mps']}")
+    print(f"  Mean min root height after fault: {summary['mean_min_root_height_after_fault_m']}")
+    print(f"  Raw episode CSV: {Path(args_cli.out_csv).resolve()}")
+    print(f"  Summary CSV: {Path(summary_csv).resolve()}")
 
     env.close()
     simulation_app.close()
