@@ -295,3 +295,11 @@ All experiment results that were run as part of the study are in "g1_policy_eval
 
 For visual debugging run any of these commands with --episodes 1, remove --headless and make sure to add --debug. Visual runs are placed into "results_experiment\g1_policy_eval_visual.csv" for raw episodic data & "results_experiment\g1_policy_eval_visual_summary.csv" for summarized data during these runs.
 
+### Available fault joints Unitree G1 Minimal Asset:
+
+The `--fault_joint` argument must match one of the joint names used by the Unitree G1 minimal robot configuration. A reference list of all available joint names is provided in:
+
+```text
+docs/g1_minimal_fault_joint_names.txt
+```
+
