@@ -249,8 +249,49 @@ PPO_RL_policy_checkpoints\PPO_WALK_GOOD_FINAL\model_11992.pt
 python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint logs/rsl_rl/<RUN_FOLDER>/<CHECKPOINT>.pt
 ```
 
-OR DIRECT FINAL POLICY CONTROLLER COMMAND:
+OR DIRECT FINAL POLICY CONTROLLER COMMAND PROVIDED:
 
 ```powershell
 python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
 ```
+
+### Evaluate Trained PPO Policy Under Fault Conditions - eval_g1_metrics_experiment.py
+
+This script evaluates the final trained PPO walking checkpoint acting as the stable motion locomotion controller in Isaac Lab and writes the experiment results to CSV files. Use this script to validate the final nominal, joint-lock, and torque-reduction experiments used for the fault-tolerance analysis within this study.
+
+A reminder the final stable PPO policy checkpoint used in the study is:
+
+```text
+PPO_RL_policy_checkpoints\PPO_WALK_GOOD_FINAL\model_11992.pt
+```
+The script runs the policy in an 8 second simulation episode for a selected number of episodes. Applies the chosen fault condition after 2.0 seconds and records lots of key metrics to a csv such as fall rate, timeout rate, episode duration, forward distance, root height, lateral drift, torque values and before/after actuator fault comparisons.
+
+The script can run in three main modes:
+
+```text
+none    = no fault, used as the nominal baseline
+lock    = locks a selected joint at its current angle after the chosen fault time. Lock epsilon is always 0.001 in the analysed experiment results
+torque  = reduces the selected joint torque limit after the chosen fault time. The experiment uses 0.50 to 0.00 as analysis
+```
+
+This runs the final PPO policy with no injected fault. The --fault_time_s 2.0 value is still used as a reference split point for before/after metrics:
+
+```powershell
+python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode none --fault_time_s 2.0 --out_csv results_experiment/nominal_baseline.csv --headless --disable_fabric --debug
+```
+
+This runs the final PPO policy and locks the chosen joint after 2.0 seconds. This example locks the left knee joint. 
+
+```powershell
+python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode lock --fault_joint left_knee_joint --fault_time_s 2.0 --lock_epsilon 0.001 --out_csv results_experiment/left_knee_lock.csv --headless --disable_fabric --debug
+```
+
+This runs the final PPO policy and reduces the torque limit of the chosen joint after 2.0 seconds. A --torque_scale of 0.0 represents complete torque loss, while 0.5 would represent 50% available torque.
+
+```powershell
+python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode torque --fault_joint left_knee_joint --torque_scale 0.0 --fault_time_s 2.0 --out_csv results_experiment/left_knee_torque000.csv --headless --disable_fabric --debug
+```
+All experiment results that were run as part of the study are in "g1_policy_eval.csv" for raw episodic data & "g1_policy_eval_summary.csv". Each run of the command is appending the results onto these csv files.
+
+For visual debugging run any of these commands with --episodes 1, remove --headless and make sure to add --debug. Visual runs are placed into "results_experiment\g1_policy_eval_visual.csv" for raw episodic data & "results_experiment\g1_policy_eval_visual_summary.csv" for summarized data during these runs.
+
