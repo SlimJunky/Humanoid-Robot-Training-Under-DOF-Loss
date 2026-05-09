@@ -80,9 +80,14 @@ CSV_FIELDS = [
     "fault_joint",
     "fault_time_s",
     "torque_scale",
+    "condition_label",
+    "fault_scheduled",
     "fault_applied",
     "fault_applied_time_s",
     "fault_lock_angle_rad",
+    "fault_joint_effort_limit_original_nm",
+    "fault_joint_effort_limit_requested_nm",
+    "fault_joint_effort_limit_after_fault_nm",
     "success_no_fall",
     "timeout",
     "fall",
@@ -151,7 +156,12 @@ SUMMARY_FIELDS = [
     "fault_joint",
     "fault_time_s",
     "torque_scale",
+    "condition_label",
+    "fault_scheduled",
     "fault_applied_rate",
+    "fault_joint_effort_limit_original_nm",
+    "fault_joint_effort_limit_requested_nm",
+    "fault_joint_effort_limit_after_fault_nm",
     "n_episodes",
     "fall_rate",
     "timeout_rate",
@@ -525,6 +535,9 @@ class EpisodeMetricBuffer:
         fault_lock_angle,
         timeout: bool,
         fall: bool,
+        fault_joint_effort_limit_original_nm=None,
+        fault_joint_effort_limit_requested_nm=None,
+        fault_joint_effort_limit_after_fault_nm=None,
     ) -> dict:
         duration = self.t[-1] if self.t else 0.0
         final_x = self.root_x[-1] if self.root_x else ""
@@ -549,6 +562,15 @@ class EpisodeMetricBuffer:
 
         x_before = values_at(self.root_x, before_indices)
         x_after = values_at(self.root_x, after_indices)
+
+        fault_scheduled = fault_mode != "none"
+
+        if fault_mode == "torque":
+            condition_label = f"torque_{fault_joint}_scale_{torque_scale:.2f}_at_{fault_time_s:.2f}s"
+        elif fault_mode == "lock":
+            condition_label = f"lock_{fault_joint}_at_{fault_time_s:.2f}s"
+        else:
+            condition_label = f"nominal_baseline_no_fault_reference_split_{fault_time_s:.2f}s"
 
         distance_before_fault = ""
         distance_after_fault = ""
@@ -588,9 +610,14 @@ class EpisodeMetricBuffer:
             "fault_joint": fault_joint,
             "fault_time_s": fault_time_s,
             "torque_scale": torque_scale,
+            "condition_label": condition_label,
+            "fault_scheduled": int(fault_scheduled),
             "fault_applied": int(fault_applied),
             "fault_applied_time_s": fault_applied_time_s if fault_applied_time_s is not None else "",
             "fault_lock_angle_rad": fault_lock_angle if fault_lock_angle is not None else "",
+            "fault_joint_effort_limit_original_nm": fault_joint_effort_limit_original_nm if fault_joint_effort_limit_original_nm is not None else "",
+            "fault_joint_effort_limit_requested_nm": fault_joint_effort_limit_requested_nm if fault_joint_effort_limit_requested_nm is not None else "",
+            "fault_joint_effort_limit_after_fault_nm": fault_joint_effort_limit_after_fault_nm if fault_joint_effort_limit_after_fault_nm is not None else "",
             "success_no_fall": int(not fall),
             "timeout": int(timeout),
             "fall": int(fall),
@@ -663,6 +690,10 @@ class FaultController:
         self.original_pos_limits = None
         self.original_vel_limits = None
 
+        self.fault_joint_effort_limit_original_nm = None
+        self.fault_joint_effort_limit_requested_nm = None
+        self.fault_joint_effort_limit_after_fault_nm = None
+
         if args.fault_mode != "none":
             resolved_joint_id = find_index(joint_names, args.fault_joint, required=True)
 
@@ -688,6 +719,11 @@ class FaultController:
 
 
     def restore(self):
+
+        self.fault_joint_effort_limit_original_nm = None
+        self.fault_joint_effort_limit_requested_nm = None
+        self.fault_joint_effort_limit_after_fault_nm = None
+
         if self.joint_id is None:
             return
 
@@ -723,13 +759,30 @@ class FaultController:
             if self.original_effort_limits is None:
                 raise RuntimeError("robot.data.joint_effort_limits not available, cannot apply torque fault.")
 
+            original_limit = float(torch.abs(self.original_effort_limits[0, jid_int]).detach().item())
+            requested_limit = original_limit * float(self.args.torque_scale)
+
             scaled = self.original_effort_limits[:, jid_int:jid_int + 1].clone() * float(self.args.torque_scale)
             self.robot.write_joint_effort_limit_to_sim(scaled, joint_ids=jid)
 
+            if hasattr(self.robot.data, "joint_effort_limits"):
+                actual_limit_now = float(torch.abs(self.robot.data.joint_effort_limits[0, jid_int]).detach().item())
+            else:
+                actual_limit_now = float("nan")
+
+            self.fault_joint_effort_limit_original_nm = original_limit
+            self.fault_joint_effort_limit_requested_nm = requested_limit
+            self.fault_joint_effort_limit_after_fault_nm = actual_limit_now
+
+
             print(
                 f"[FAULT] t={t_s:.3f}s torque scale applied to {self.args.fault_joint}: "
-                f"{self.args.torque_scale:.3f}"
+                f"scale={self.args.torque_scale:.3f}, "
+                f"original_limit={original_limit:.3f} Nm, "
+                f"requested_limit={requested_limit:.3f} Nm, "
+                f"data_limit_now={actual_limit_now:.3f} Nm"
             )
+
             return True, None
 
         if self.args.fault_mode == "lock":
@@ -833,10 +886,10 @@ def main():
 
     # Quick print to cleanly confirm steps.
     print(
-    f"Evaluation timing: step_dt={step_dt:.6f}s, "
-    f"episode_length_s={episode_length_s:.3f}s, "
-    f"max_steps={max_steps}, "
-    f"fault_time_s={args_cli.fault_time_s:.3f}s"
+        f"Evaluation timing: step_dt={step_dt:.6f}s, "
+        f"episode_length_s={episode_length_s:.3f}s, "
+        f"max_steps={max_steps}, "
+        f"fault_time_s={args_cli.fault_time_s:.3f}s"
     )
 
     fault_controller = FaultController(robot, joint_names, args_cli)
@@ -944,6 +997,9 @@ def main():
             fault_lock_angle=fault_lock_angle,
             timeout=timeout,
             fall=fall,
+            fault_joint_effort_limit_original_nm=fault_controller.fault_joint_effort_limit_original_nm,
+            fault_joint_effort_limit_requested_nm=fault_controller.fault_joint_effort_limit_requested_nm,
+            fault_joint_effort_limit_after_fault_nm=fault_controller.fault_joint_effort_limit_after_fault_nm,
         )
 
         append_csv(args_cli.out_csv, row)
@@ -1015,7 +1071,12 @@ def main():
             "fault_joint": rows[0].get("fault_joint", ""),
             "fault_time_s": rows[0].get("fault_time_s", ""),
             "torque_scale": rows[0].get("torque_scale", ""),
+            "condition_label": rows[0].get("condition_label", ""),
+            "fault_scheduled": rows[0].get("fault_scheduled", ""),
             "fault_applied_rate": sum_of_rows(rows, "fault_applied") / n,
+            "fault_joint_effort_limit_original_nm": mean_of_rows(rows, "fault_joint_effort_limit_original_nm"),
+            "fault_joint_effort_limit_requested_nm": mean_of_rows(rows, "fault_joint_effort_limit_requested_nm"),
+            "fault_joint_effort_limit_after_fault_nm": mean_of_rows(rows, "fault_joint_effort_limit_after_fault_nm"),
             "n_episodes": n,
 
             "fall_rate": sum_of_rows(rows, "fall") / n,
@@ -1078,17 +1139,33 @@ def main():
 
     print("\n[SUMMARY]")
     print(f"  Episodes: {summary['n_episodes']}")
+    print(f"  Condition: {summary['condition_label']}")
     print(f"  Fault mode: {summary['fault_mode']}")
-    print(f"  Fault joint: {summary['fault_joint']}")
-    print(f"  Torque scale: {summary['torque_scale']}")
-    print(f"  Fault applied rate: {summary['fault_applied_rate']:.3f}")
+    if summary["fault_mode"] == "none":
+        print("  Fault status: no fault scheduled or applied; 2.0s is only the reference split time")
+    else:
+        print(f"  Fault joint: {summary['fault_joint']}")
+        print(f"  Torque scale: {summary['torque_scale']}")
+        print(f"  Fault applied rate: {summary['fault_applied_rate']:.3f}")
+        if summary["fault_mode"] == "torque":
+            print(f"  Fault effort limit original Nm: {summary['fault_joint_effort_limit_original_nm']}")
+            print(f"  Fault effort limit requested Nm: {summary['fault_joint_effort_limit_requested_nm']}")
+            print(f"  Fault effort limit after apply Nm: {summary['fault_joint_effort_limit_after_fault_nm']}")  
+    
+    if summary["fault_mode"] == "none":
+        print(f"  Mean distance after 2.0s reference split: {summary['mean_distance_after_fault_m']}")
+        print(f"  Mean forward velocity after 2.0s reference split: {summary['mean_forward_vel_after_fault_mps']}")
+        print(f"  Mean min root height after 2.0s reference split: {summary['mean_min_root_height_after_fault_m']}")
+    else:
+        print(f"  Mean distance after fault: {summary['mean_distance_after_fault_m']}")
+        print(f"  Mean forward velocity after fault: {summary['mean_forward_vel_after_fault_mps']}")
+        print(f"  Mean min root height after fault: {summary['mean_min_root_height_after_fault_m']}")
+
+    if summary["fault_mode"] == "lock":
+        print("  Lock validation: use fault_lock_angle_rad, fault_joint_pos_at_fault_rad, fault_joint_pos_final_rad, and fault_joint velocity metrics in the raw CSV") 
     print(f"  Fall rate: {summary['fall_rate']:.3f}")
     print(f"  Timeout rate: {summary['timeout_rate']:.3f}")
     print(f"  Success rate: {summary['success_rate']:.3f}")
-    print(f"  Mean duration: {summary['mean_episode_duration_s']}")
-    print(f"  Mean distance after fault: {summary['mean_distance_after_fault_m']}")
-    print(f"  Mean forward velocity after fault: {summary['mean_forward_vel_after_fault_mps']}")
-    print(f"  Mean min root height after fault: {summary['mean_min_root_height_after_fault_m']}")
     print(f"  Raw episode CSV: {Path(args_cli.out_csv).resolve()}")
     print(f"  Summary CSV: {Path(summary_csv).resolve()}")
 
