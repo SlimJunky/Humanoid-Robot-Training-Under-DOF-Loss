@@ -69,6 +69,8 @@ from rsl_rl.runners import OnPolicyRunner
 from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 
+from typing import Any
+
 import Humanoid_Robot_Training_Under_DOF_Loss.tasks.direct.g1_bc_ppo
 
 
@@ -809,6 +811,25 @@ class FaultController:
         return already_applied, None
 
 
+'''Helper function to render block during simulation step'''
+
+def render_if_visible(gym_env, base_env: Any, args_cli):
+    if getattr(args_cli, "headless", False):
+        return
+
+    sim = getattr(base_env, "sim", None)
+    if sim is not None and hasattr(sim, "render"):
+        try:
+            sim.render()
+            return
+        except Exception:
+            pass
+
+    try:
+        gym_env.render()
+    except Exception:
+        pass
+
 def main():
     env_cfg = parse_env_cfg(
         args_cli.task,
@@ -829,9 +850,10 @@ def main():
     print(f"Loading checkpoint: {resume_path}")
     print(f"Writing raw episode CSV results to: {args_cli.out_csv}")
 
-    # Create the Direct RL task environment.
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
-    base_env = env.unwrapped
+    # Create the Direct RL task environment. Also provide render mode for GUI visual viewing after actuator fault.
+    render_mode = None if getattr(args_cli, "headless", False) else "human"
+    gym_env = gym.make(args_cli.task, cfg=env_cfg, render_mode=render_mode)
+    base_env: Any = gym_env.unwrapped
 
     robot = get_scene_robot(base_env, args_cli.robot_name)
     joint_names, body_names = get_names(robot)
@@ -863,7 +885,7 @@ def main():
     print(f"left_knee_joint_id={left_knee_joint_id}")
     print(f"right_knee_joint_id={right_knee_joint_id}")
 
-    env = RslRlVecEnvWrapper(env)
+    env = RslRlVecEnvWrapper(gym_env)
 
     # Load policy checkpoint and saved weights.
     # This converts deprecated old-style `policy = RslRlPpoActorCriticCfg(...)` into the actor/critic format expected by newer rsl-rl.
@@ -975,6 +997,9 @@ def main():
                 actions = policy(obs)
                 metrics.update_action_metrics(actions)
                 obs, rewards, dones, extras = env.step(actions)
+            
+            render_if_visible(gym_env, base_env, args_cli)
+         
 
             done = unwrap_scalar_bool(dones)
 
