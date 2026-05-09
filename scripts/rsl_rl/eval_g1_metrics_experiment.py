@@ -916,8 +916,6 @@ def main():
 
     fault_controller = FaultController(robot, joint_names, args_cli)
 
-    obs = reset_env_get_obs(env)
-
     episode_rows = []
 
 
@@ -993,10 +991,13 @@ def main():
                 fall = True
                 break
 
-            with torch.inference_mode():
+            with torch.no_grad():
                 actions = policy(obs)
-                metrics.update_action_metrics(actions)
-                obs, rewards, dones, extras = env.step(actions)
+
+            actions = actions.detach().clone()
+
+            metrics.update_action_metrics(actions)
+            obs, rewards, dones, extras = env.step(actions)
             
             render_if_visible(gym_env, base_env, args_cli)
          

@@ -171,13 +171,13 @@ It also includes the location of the mapped .npz file generated in step 3 for re
 
 ## Evaluating Policy Controller & Running Experiments:
 
-### Run the Final Stable Policy Controller used in the experiments by itself:
+### Run The Final Stable Policy Controller By Itself:
 
 ```powershell
 python scripts/rsl_rl/play.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --num_envs 1 --checkpoint PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt --device cuda:0
 ```
 
-### Run the experiments against Final Stable Policy Controller:
+### Run The Experiments Against Final Stable Policy Controller:
 
 Please find the provided script in:
 
@@ -210,7 +210,7 @@ This runs the final PPO policy with no injected fault. The --fault_time_s 2.0 va
 python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode none --fault_time_s 2.0 --out_csv results_experiment/g1_policy_eval.csv --headless --disable_fabric --debug
 ```
 
-This runs the final PPO policy and locks the chosen joint after 2.0 seconds. This example locks the left knee joint. 
+This runs the final PPO policy and locks the chosen joint after 2.0 seconds. This example locks the left knee joint. Lock epsilon is always "0.001" for these experiments
 
 ```powershell
 python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode lock --fault_joint left_knee_joint --fault_time_s 2.0 --lock_epsilon 0.001 --out_csv results_experiment/g1_policy_eval.csv --headless --disable_fabric --debug
