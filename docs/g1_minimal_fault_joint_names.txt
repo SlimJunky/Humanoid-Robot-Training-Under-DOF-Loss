@@ -1,5 +1,5 @@
 # Unitree G1 minimal joint names available for --fault_join
-# Source: provided from debug print G1_MINIMAL_CFG
+# Source: provided from loaded G1_MINIMAL_CFG robot articulation during experiment setup
 
 left_hip_pitch_joint
 right_hip_pitch_joint
