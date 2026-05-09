@@ -14,6 +14,7 @@ Save one row of metrics for that episode. Then average amount of episodes for th
 import argparse
 from pathlib import Path
 
+
 from isaaclab.app import AppLauncher
 
 import cli_args
@@ -25,6 +26,7 @@ parser = argparse.ArgumentParser(description="Evaluate G1 PPO walking policy wit
 parser.add_argument("--task", type=str, default="Isaac-G1-BC-PPO-Walk-Direct-v0")
 parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--episodes", type=int, default=10)
+parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations, this is more accurate.")
 parser.add_argument("--out_csv", type=str, default="results_experiment/g1_policy_eval.csv")
 parser.add_argument("--summary_csv", type=str, default="", help="Optional summary CSV path. If empty, one is created next to out_csv.")
 parser.add_argument("--robot_name", type=str, default="robot")
@@ -46,12 +48,15 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
+
 if args_cli.num_envs != 1:
     raise ValueError("This metric script is intentionally designed for --num_envs 1 for clean per-episode CSV results.")
+
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+'''This did not run as epxected so need to important direct environment task and other packages here''' 
 import csv
 import math
 import os
@@ -61,10 +66,10 @@ import gymnasium as gym
 
 from rsl_rl.runners import OnPolicyRunner
 
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, handle_deprecated_rsl_rl_cfg
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 
-
+import Humanoid_Robot_Training_Under_DOF_Loss.tasks.direct.g1_bc_ppo
 
 
 CSV_FIELDS = [
@@ -146,6 +151,7 @@ SUMMARY_FIELDS = [
     "fault_joint",
     "fault_time_s",
     "torque_scale",
+    "fault_applied_rate",
     "n_episodes",
     "fall_rate",
     "timeout_rate",
@@ -238,14 +244,28 @@ def find_first_index(names: list[str], candidates: list[str]) -> int | None:
 
 
 def get_scene_robot(base_env, robot_name: str):
-    if robot_name in base_env.scene:
+    # Direct lookup first which works for InteractiveScene.
+    try:
         return base_env.scene[robot_name]
+    except KeyError:
+        pass
 
-    # fallback: find first asset with joint_pos/root_pos data
-    for name, asset in base_env.scene.items():
-        if hasattr(asset, "data") and hasattr(asset.data, "joint_pos") and hasattr(asset.data, "root_pos_w"):
-            print(f"robot_name='{robot_name}' not found. Using scene asset '{name}' instead.")
-            return asset
+    # Fallback: search known scene containers if available.
+    if hasattr(base_env.scene, "articulations"):
+        for name, asset in base_env.scene.articulations.items():
+            if hasattr(asset, "data") and hasattr(asset.data, "joint_pos") and hasattr(asset.data, "root_pos_w"):
+                print(f"robot_name='{robot_name}' not found. Using articulation '{name}' instead.")
+                return asset
+
+    # Fallback: try known entity names manually.
+    for name in ["robot", "g1", "humanoid"]:
+        try:
+            asset = base_env.scene[name]
+            if hasattr(asset, "data") and hasattr(asset.data, "joint_pos") and hasattr(asset.data, "root_pos_w"):
+                print(f"robot_name='{robot_name}' not found. Using scene asset '{name}' instead.")
+                return asset
+        except KeyError:
+            continue
 
     raise RuntimeError(f"Could not find robot asset '{robot_name}' in env.scene.")
 
@@ -665,7 +685,7 @@ class FaultController:
             self.original_pos_limits = robot.data.soft_joint_pos_limits.clone()
         if hasattr(robot.data, "joint_vel_limits"):
             self.original_vel_limits = robot.data.joint_vel_limits.clone()
-            
+
 
     def restore(self):
         if self.joint_id is None:
@@ -741,35 +761,33 @@ def main():
         args_cli.task,
         device=args_cli.device,
         num_envs=args_cli.num_envs,
-        use_fabric=not args_cli.disable_fabric,
+        use_fabric=not getattr(args_cli, "disable_fabric", False),
     )
 
-    agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
-
-    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
+    agent_cfg_raw: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
+    log_root_path = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg_raw.experiment_name))
 
     checkpoint_arg = str(args_cli.checkpoint) if args_cli.checkpoint else ""
     if checkpoint_arg and Path(checkpoint_arg).is_file():
         resume_path = str(Path(checkpoint_arg).resolve())
     else:
-        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
-
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg_raw.load_run, agent_cfg_raw.load_checkpoint)
+    
     print(f"Loading checkpoint: {resume_path}")
     print(f"Writing raw episode CSV results to: {args_cli.out_csv}")
 
-    # Makes the Direct RL task here from Isaac-G1-BC-PPO-Walk-Direct-v0
+    # Create the Direct RL task environment.
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
     base_env = env.unwrapped
 
     robot = get_scene_robot(base_env, args_cli.robot_name)
     joint_names, body_names = get_names(robot)
 
-    # Fast torque data check for robot
     print("Torque data availability:")
-    print("  applied_torque:", hasattr(robot.data, "applied_torque"))
-    print("  computed_torque:", hasattr(robot.data, "computed_torque"))
-    print("  joint_effort:", hasattr(robot.data, "joint_effort"))
-    print("  joint_effort_limits:", hasattr(robot.data, "joint_effort_limits"))
+    print(" applied_torque:", hasattr(robot.data, "applied_torque"))
+    print(" computed_torque:", hasattr(robot.data, "computed_torque"))
+    print(" joint_effort:", hasattr(robot.data, "joint_effort"))
+    print(" joint_effort_limits:", hasattr(robot.data, "joint_effort_limits"))
 
     print("Available joint names:")
     for j in joint_names:
@@ -794,14 +812,32 @@ def main():
 
     env = RslRlVecEnvWrapper(env)
 
-    # Load policy checkpoint and loads saved weights
-    runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
+    # Load policy checkpoint and saved weights.
+    # This converts deprecated old-style `policy = RslRlPpoActorCriticCfg(...)` into the actor/critic format expected by newer rsl-rl.
+    
+    agent_cfg = handle_deprecated_rsl_rl_cfg(agent_cfg_raw, "5.0.1")
+    agent_cfg_dict = agent_cfg.to_dict()
+
+    print("RSL-RL config keys:", agent_cfg_dict.keys())
+    print("Actor config:", agent_cfg_dict.get("actor", None))
+    print("Critic config:", agent_cfg_dict.get("critic", None))
+    print("Algorithm config:", agent_cfg_dict.get("algorithm", None))
+
+    runner = OnPolicyRunner(env, agent_cfg_dict, log_dir=None, device=agent_cfg.device)
     runner.load(resume_path)
     policy = runner.get_inference_policy(device=env.device)
 
     step_dt = get_step_dt(base_env)
     episode_length_s = get_episode_length_s(base_env)
     max_steps = int(math.ceil(episode_length_s / step_dt)) + 5
+
+    # Quick print to cleanly confirm steps.
+    print(
+    f"Evaluation timing: step_dt={step_dt:.6f}s, "
+    f"episode_length_s={episode_length_s:.3f}s, "
+    f"max_steps={max_steps}, "
+    f"fault_time_s={args_cli.fault_time_s:.3f}s"
+    )
 
     fault_controller = FaultController(robot, joint_names, args_cli)
 
@@ -838,39 +874,29 @@ def main():
                 fault_lock_angle = lock_angle_now
                 just_applied_fault = True
 
-
-
-            with torch.inference_mode():
-                actions = policy(obs)
-                metrics.update_action_metrics(actions)
-                obs, rewards, dones, extras = env.step(actions)
-
             metrics.update(
-                t_s=t_s,
-                robot=robot,
-                left_foot_body_id=left_foot_body_id,
-                right_foot_body_id=right_foot_body_id,
-                left_knee_joint_id=left_knee_joint_id,
-                right_knee_joint_id=right_knee_joint_id,
-                foot_contact_height=args_cli.foot_contact_height,
+            t_s=t_s,
+            robot=robot,
+            left_foot_body_id=left_foot_body_id,
+            right_foot_body_id=right_foot_body_id,
+            left_knee_joint_id=left_knee_joint_id,
+            right_knee_joint_id=right_knee_joint_id,
+            foot_contact_height=args_cli.foot_contact_height,
             )
 
             metrics.update_fault_joint_metrics(
-                robot=robot,
-                fault_joint_id=fault_controller.joint_id,
-                fault_applied=fault_applied,
-                just_applied_fault=just_applied_fault,
+            robot=robot,
+            fault_joint_id=fault_controller.joint_id,
+            fault_applied=fault_applied,
+            just_applied_fault=just_applied_fault,
             )
 
             metrics.update_torque_energy_metrics(
-                robot=robot,
-                step_dt=step_dt,
-                fault_joint_id=fault_controller.joint_id,
+            robot=robot,
+            step_dt=step_dt,
+            fault_joint_id=fault_controller.joint_id,
             )
 
-            done = unwrap_scalar_bool(dones)
-
-            # Extra local fall heuristic in case the env does not terminate immediately.
             root_z = float(robot.data.root_pos_w[0, 2].detach().item())
             local_height_fall = root_z < float(args_cli.fall_height)
 
@@ -883,14 +909,27 @@ def main():
                     f"[DEBUG] ep={ep + 1} t={t_s:.2f}s "
                     f"x={x:.3f} y={y:.3f} z={root_z:.3f} "
                     f"vx_b={vx:.3f} vy_b={vy:.3f} "
-                    f"done={done} fault={fault_applied}"
+                    f"fault={fault_applied}"
                 )
                 last_debug_t = t_s
 
-            if done or local_height_fall:
-                timeout = get_timeout_from_extras(extras, t_s, episode_length_s, done)
-                fall = bool((done and not timeout) or local_height_fall)
+            if local_height_fall:
+                timeout = False
+                fall = True
                 break
+
+            with torch.inference_mode():
+                actions = policy(obs)
+                metrics.update_action_metrics(actions)
+                obs, rewards, dones, extras = env.step(actions)
+
+            done = unwrap_scalar_bool(dones)
+
+            if done:
+                timeout = get_timeout_from_extras(extras, t_s, episode_length_s, done)
+                fall = bool(not timeout)
+                break
+
 
         row = metrics.finalize(
             task=args_cli.task,
@@ -976,6 +1015,7 @@ def main():
             "fault_joint": rows[0].get("fault_joint", ""),
             "fault_time_s": rows[0].get("fault_time_s", ""),
             "torque_scale": rows[0].get("torque_scale", ""),
+            "fault_applied_rate": sum_of_rows(rows, "fault_applied") / n,
             "n_episodes": n,
 
             "fall_rate": sum_of_rows(rows, "fall") / n,
@@ -1041,6 +1081,7 @@ def main():
     print(f"  Fault mode: {summary['fault_mode']}")
     print(f"  Fault joint: {summary['fault_joint']}")
     print(f"  Torque scale: {summary['torque_scale']}")
+    print(f"  Fault applied rate: {summary['fault_applied_rate']:.3f}")
     print(f"  Fall rate: {summary['fall_rate']:.3f}")
     print(f"  Timeout rate: {summary['timeout_rate']:.3f}")
     print(f"  Success rate: {summary['success_rate']:.3f}")
