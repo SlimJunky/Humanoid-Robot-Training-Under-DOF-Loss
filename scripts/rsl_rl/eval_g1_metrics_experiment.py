@@ -646,14 +646,16 @@ class FaultController:
         if args.fault_mode != "none":
             resolved_joint_id = find_index(joint_names, args.fault_joint, required=True)
 
-        if resolved_joint_id is None:
-            raise RuntimeError(f"Could not resolve fault joint: {args.fault_joint}")
+            if resolved_joint_id is None:
+                raise RuntimeError(f"Could not resolve fault joint: {args.fault_joint}")
 
-        self.joint_id = int(resolved_joint_id)
-        print(
-        f"Fault joint '{args.fault_joint}' resolved to index "
-        f"{self.joint_id}: {joint_names[self.joint_id]}"
-        )
+            joint_id_int = int(resolved_joint_id)
+            self.joint_id = joint_id_int
+
+            print(
+                f"Fault joint '{args.fault_joint}' resolved to index "
+                f"{joint_id_int}: {joint_names[joint_id_int]}"
+            )
 
         if hasattr(robot.data, "joint_effort_limits"):
             self.original_effort_limits = robot.data.joint_effort_limits.clone()
@@ -663,6 +665,7 @@ class FaultController:
             self.original_pos_limits = robot.data.soft_joint_pos_limits.clone()
         if hasattr(robot.data, "joint_vel_limits"):
             self.original_vel_limits = robot.data.joint_vel_limits.clone()
+            
 
     def restore(self):
         if self.joint_id is None:
