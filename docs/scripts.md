@@ -289,7 +289,7 @@ python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-
 This runs the final PPO policy and reduces the torque limit of the chosen joint after 2.0 seconds. A --torque_scale of 0.0 represents complete torque loss, while 0.5 would represent 50% available torque.
 
 ```powershell
-python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode torque --fault_joint left_knee_joint --torque_scale 0.0 --fault_time_s 2.0 --out_csv results_experiment/g1_policy_eval.csv --headless --disable_fabric --debug
+python scripts/rsl_rl/eval_g1_metrics_experiment.py --task Isaac-G1-BC-PPO-Walk-Direct-v0 --checkpoint "PPO_RL_policy_checkpoints/PPO_WALK_GOOD_FINAL/model_11992.pt" --episodes 10 --fault_mode torque --fault_joint left_knee_joint --torque_scale 0.25 --fault_time_s 2.0 --out_csv results_experiment/g1_policy_eval.csv --headless --disable_fabric --debug
 ```
 All experiment results that were run as part of the study are in "g1_policy_eval.csv" for raw episodic data & "g1_policy_eval_summary.csv". Each run of the command is appending the results onto these csv files.
 
