@@ -232,7 +232,7 @@ The `--fault_joint` argument must match one of the joint names used by the Unitr
 ```text
 docs/g1_minimal_fault_joint_names.txt
 ```
-
+ 
 ## Isaac Lab NVIDIA external project template - Default Recommendation as provided by NVIDIA
 
 ## Overview
